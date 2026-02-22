@@ -1,7 +1,4 @@
-tabpfn==6.3.1
-numpy==2.4.1
-scipy==1.17.0
-scikit-learn==1.7.2
-
-# torch and torchvision versions should be compatible with your CUDA version
-# torch==2.7.1 (CPU version)
+tabpfn
+numpy
+scipy
+scikit-learn

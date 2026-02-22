@@ -2,7 +2,7 @@ import numpy as np
 from scipy import stats
 
 
-def calculate_llh_instance(observations, shape, scale, target_scale):
+def calculate_llh_instance_distnet(observations, shape, scale, target_scale):
     """
     
      mean log-likelihood per instance for lognormal distribution. (FOR DISTNET)
@@ -16,10 +16,10 @@ def calculate_llh_instance(observations, shape, scale, target_scale):
         mean log-likelihood
     """
     if target_scale == "max":
-        llh = stats.distributions.lognorm.logpdf(observations, shape, loc=0, scale=scale).mean() + np.log(observations.max())
-    return llh
+        instance_llh = stats.distributions.lognorm.logpdf(observations, shape, loc=0, scale=scale).mean() + np.log(observations.max())
+    return instance_llh
 
-def calculate_nllh(observations, preds, target_scale="max"):
+def calculate_nllh_distnet(observations, preds, target_scale="max"):
     """
     Calculate the negative log-likelihood (NLLH) for DistNet model on given instances.
     Args:
@@ -36,7 +36,7 @@ def calculate_nllh(observations, preds, target_scale="max"):
     for obs, pred in zip(observations, preds):
         shape = pred[0]
         scale = pred[1]
-        llh_instances += calculate_llh_instance(obs, shape, scale, target_scale=target_scale)
+        llh_instances += calculate_llh_instance_distnet(obs, shape, scale, target_scale=target_scale)
     
     nllh = -llh_instances / n_instances
     return nllh

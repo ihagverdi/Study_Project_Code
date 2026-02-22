@@ -1,6 +1,6 @@
 import os
 
-def get_data_dir(): return os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+def get_data_dir(): return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "distnet_data")
 
 def get_sc_dict():
     data_dir = get_data_dir()

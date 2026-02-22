@@ -5,14 +5,14 @@ import numpy as np
 from sklearn.model_selection import KFold, train_test_split
 import torch
 import time
-from helper import data_source_release, load_data
-from helper.preprocess import preprocess_features
+from helper.tabpfn_vs_distnet_helpers import data_source_release, load_data
+from helper.tabpfn_vs_distnet_helpers.preprocess import preprocess_features
 
 RANDOM_STATE=0
 
 def subsample_training_data(X_train_flat, y_train_flat, context_size, seed, subsample_method):
     """
-    Subsamples the dataset to maximize instance diversity.
+    Subsamples the dataset. Currently supports 'flatten-random' which randomly samples from the flattened training data.
     
     Args:
         X_train_flat: (n_instances, n_features)
@@ -36,7 +36,7 @@ def subsample_training_data(X_train_flat, y_train_flat, context_size, seed, subs
 
 def subsample_features(X_train, *arrays, drop_rate, seed):
     """
-    Randomly drops features from the dataset based on the specified drop rate.
+    Randomly samples a subset of features from the input arrays based on the specified drop rate.
     
     Args:
         X_train: (n_samples, n_features)
@@ -45,8 +45,7 @@ def subsample_features(X_train, *arrays, drop_rate, seed):
         seed: Random seed for reproducibility.
 
     Returns:
-        tuple(X_train_sub, X_valid_sub, X_test_sub)
-
+        Tuple of subsampled arrays, with the same order as input (X_train, *arrays)
 
     """
 
@@ -103,18 +102,20 @@ def train_test_model(
     # Get CV splits
     kf = KFold(n_splits=10, shuffle=True, random_state=RANDOM_STATE)
     splits = list(kf.split(np.arange(features.shape[0])))
-    train_idx, test_idx = splits[fold]
+    train_idx, test_idx = splits[fold]  # process the specified fold
 
     #------------------------------------#
     
     X_train, X_test = features[train_idx], features[test_idx]
     y_train, y_test = runtimes[train_idx], runtimes[test_idx]
 
+    del features, runtimes  # free memory
+
     if num_samples_per_instance != 100:  # 100 is the full data
         print(f"Subsampling the training data to {num_samples_per_instance} samples per instance (without replacement).")
         assert 1 <= num_samples_per_instance <= 100, "num_samples_per_instance must be between 1 and 100"
         rng = np.random.default_rng(seed=100)
-        subsample_idx = rng.choice(runtimes.shape[1], size=num_samples_per_instance, replace=False)
+        subsample_idx = rng.choice(y_train.shape[1], size=num_samples_per_instance, replace=False)
         y_train = y_train[:, subsample_idx]
     
 
@@ -122,7 +123,6 @@ def train_test_model(
     X_train_flat = np.repeat(X_train, repeats=num_samples_per_instance, axis=0)
     y_train_flat = y_train.reshape(-1, 1)
 
-    # context sampling
     if context_size is not None:
         assert seed_context is not None, "seed_context must be provided when context_size is specified."
         print(f"Subsampling the training data to context size {context_size} using method '{subsample_method}'")
@@ -134,15 +134,13 @@ def train_test_model(
         print(f"Sampling features with drop rate {feature_drop_rate}")
         X_train_flat, X_test = subsample_features(X_train_flat, X_test, drop_rate=feature_drop_rate, seed=seed_features)
     
-    # X_train shape: (n, d)
-    # y_train shape: (n, 1)
     if model_name == 'distnet':
-        from helper.distnet_lognormal import DistNetModel
-        from helper.distnet_helpers import calculate_nllh
-        from helper.scalers import max_scaling
+        from helper.tabpfn_vs_distnet_helpers.distnet_lognormal import DistNetModel
+        from helper.tabpfn_vs_distnet_helpers.distnet_helpers import calculate_nllh_distnet
+        from helper.tabpfn_vs_distnet_helpers.scalers import max_scaling
 
-        early_stopping = X_train_flat.shape[0] >= 256 and early_stopping  # at least 50 validation samples
-        print(f"early stopping: {early_stopping}")
+        early_stopping = X_train_flat.shape[0] >= 256 and early_stopping
+        # print(f"early stopping: {early_stopping}")
         # preprocess features
         if early_stopping:
             X_train_flat, X_valid_flat, y_train_flat, y_valid_flat = train_test_split(X_train_flat, y_train_flat, test_size=0.2, random_state=RANDOM_STATE)
@@ -160,9 +158,11 @@ def train_test_model(
                 y_train_flat, y_test = max_scaling(y_train_flat, y_test)
 
         # give the model a name and pass it a path to save
-        distnet_model_name = f"model_{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_{feature_drop_rate}_{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}.pt"
-        os.makedirs(os.path.join(save_dir, "models"), exist_ok=True)
-        distnet_save_path = os.path.join(save_dir, "models", distnet_model_name)
+        distnet_model_name = (f"model_{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_"
+                              f"{feature_drop_rate}_{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}.pt")
+        
+        os.makedirs(os.path.join(save_dir, "distnet_models"), exist_ok=True)
+        distnet_save_path = os.path.join(save_dir, "distnet_models", distnet_model_name)
         # initialize and train model
         model = DistNetModel(n_input_features=X_train_flat.shape[1],
                             n_epohcs=n_epochs,
@@ -178,14 +178,14 @@ def train_test_model(
         model.train(X_train_flat, y_train_flat)
         # evaluate model
         y_pred = model.predict(X_test)
-        nllh = calculate_nllh(y_test, y_pred, target_scale=target_scale)
+        nllh = calculate_nllh_distnet(y_test, y_pred, target_scale=target_scale)
 
         print(f"DistNet Test NLLH: {nllh:.4f}")
 
     elif model_name == 'tabpfn':
         from tabpfn import TabPFNRegressor
-        from helper.scalers import log_scaling, max_scaling, z_score_scaling
-        from helper.pfn_helpers import calculate_nllh_pfn
+        from helper.tabpfn_vs_distnet_helpers.scalers import log_scaling, max_scaling, z_score_scaling
+        from helper.tabpfn_vs_distnet_helpers.tabpfn_helpers import calculate_nllh_tabpfn
         
         # Scale y (runtime) values
         args = None
@@ -212,7 +212,7 @@ def train_test_model(
         model.fit(X_train_flat, y_train_flat.ravel())
 
         # evaluate model
-        nllh = calculate_nllh_pfn(model, X_test, y_test, validation_batch_size=val_batch_size, target_scale=target_scale, args=args)
+        nllh = calculate_nllh_tabpfn(model, X_test, y_test, validation_batch_size=val_batch_size, target_scale=target_scale, args=args)
 
         print(f"TabPFN Test NLLH: {nllh:.4f}")
         
@@ -262,7 +262,9 @@ def train_test_model(
         }
 
     # 2. Build filename and save
-    results_file_name = f"{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_{feature_drop_rate}_{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}_{'cpu' if use_cpu else 'gpu'}.pkl"
+    results_file_name = (f"{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_{feature_drop_rate}_"
+                         f"{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}_{'cpu' if use_cpu else 'gpu'}.pkl")
+
     os.makedirs(os.path.join(save_dir, "metadata"), exist_ok=True)
     results_save_path = os.path.join(save_dir, "metadata", results_file_name)
 
@@ -294,6 +296,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     
+    print(f"🧪 Starting the experiment with the following configuration:\n{args}")
     start = time.time()
     train_test_model(
         model_name=args.model,
@@ -315,4 +318,4 @@ if __name__ == "__main__":
         wc_time_limit=args.wc_time_limit
     )
     end = time.time()
-    print(f"Total execution time: {end - start:.2f} seconds")
+    print(f"✅ Experiment completed in {end - start:.2f} seconds.")

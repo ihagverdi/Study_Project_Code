@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import time
-import copy
+from copy import deepcopy
 
 def loss_fn(y_true, y_pred):
     """
@@ -55,8 +55,6 @@ class DistNetModel:
         self.wc_time_limit = wc_time_limit  # seconds
         self.batch_size = batch_size
         self.device = torch.device('cpu')
-
-        print(f"Using device: {self.device}")
 
         if save_path is None:
             self.save_flag = False
@@ -151,7 +149,7 @@ class DistNetModel:
                 if self.early_stopping:
                     if val_loss < self.best_val_loss:
                         self.best_val_loss = val_loss
-                        self.best_model_checkpoint = copy.deepcopy(self.model.state_dict())
+                        self.best_model_checkpoint = deepcopy(self.model.state_dict())
                         self.epochs_no_improve = 0
                     else:
                         self.epochs_no_improve += 1

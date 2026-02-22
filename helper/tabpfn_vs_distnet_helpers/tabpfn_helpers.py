@@ -1,17 +1,17 @@
 import numpy as np
 import torch
 
-def calculate_nllh_pfn(pfn_model, X_valid, y_valid, validation_batch_size, target_scale, args=None):
+def calculate_nllh_tabpfn(model, X_valid, y_valid, validation_batch_size, target_scale, args=None):
     '''
-    Calculate the negative log-likelihood (NLLH) for a PFN model on validation data.
+    Calculate the negative log-likelihood (NLLH) for a PFN model.
 
     Parameters:
-    - pfn_model: The PFN model with a predict method.
-    - X_valid: Validation input data (2D array-like).
-    - y_valid: Validation target data (2D array-like).
+    - model: The tabPFN model with a predict method.
+    - X_valid: Validation input data (n_instances, n_features).
+    - y_valid: Validation target data (n_instances, num_samples_per_instance).
     - validation_batch_size: Batch size for processing validation data.
     - target_scale: Scaling method for targets ('max', 'log', or 'z-score').
-    - args: Additional arguments for scaling (mean, std for 'z-score').
+    - args: Additional arguments for scaling ([mean, std] for 'z-score').
     
     '''
     assert validation_batch_size > 0, "validation_batch_size must be a positive integer"
@@ -26,7 +26,7 @@ def calculate_nllh_pfn(pfn_model, X_valid, y_valid, validation_batch_size, targe
         y_batch = y_valid[start: start + validation_batch_size]
 
         with torch.no_grad():
-            preds = pfn_model.predict(X_batch, output_type="full")
+            preds = model.predict(X_batch, output_type="full")
             logits = preds["logits"]
             criterion = preds["criterion"]
 
