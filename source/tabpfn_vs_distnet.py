@@ -301,7 +301,15 @@ def train_test_model(
         tabpfn_fit_time = time.time() - tabpfn_fit_time_start
 
         # evaluate model
-        nllh, tabpfn_preds, tabpfn_predict_time = predict_and_calculate_nllh_tabpfn(model, X_test, y_test, validation_batch_size=val_batch_size, target_scale=target_scale, args=args)
+        nllh, tabpfn_preds_full, tabpfn_predict_time = predict_and_calculate_nllh_tabpfn(model, X_test, y_test, validation_batch_size=val_batch_size, target_scale=target_scale, args=args)
+
+        tabpfn_preds_full_fileName = (f"{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_{seed_samples_per_instance}_{feature_drop_rate}_"
+                         f"{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}_{'cpu' if use_cpu else 'gpu'}_test_preds.pkl")
+
+        os.makedirs(os.path.join(save_dir, "tabpfn_preds_full"), exist_ok=True)
+        tabpfn_preds_full_path = os.path.join(save_dir, "tabpfn_preds_full", tabpfn_preds_full_fileName)
+        with open(tabpfn_preds_full_path, 'wb') as f:
+            pickle.dump(tabpfn_preds_full, f)
 
         results_dict = {
             'model_name': 'tabpfn',
@@ -319,7 +327,6 @@ def train_test_model(
             'use_cpu': use_cpu,
             'save_dir': save_dir,
             'val_batch_size': val_batch_size,
-            'test_preds': tabpfn_preds,
             'random_state': RANDOM_STATE,
             'result_metrics': {
                 'nllh': nllh,
@@ -329,7 +336,6 @@ def train_test_model(
         }
         print(f"TabPFN Test NLLH: {nllh:.4f}, fit and predict time: {(tabpfn_fit_time+tabpfn_predict_time):.2f} seconds.")
         
-
     assert results_dict is not None, "results_dict is NONE"
     results_file_name = (f"{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_{seed_samples_per_instance}_{feature_drop_rate}_"
                          f"{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}_{early_stopping}_{'cpu' if use_cpu else 'gpu'}.pkl")
