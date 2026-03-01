@@ -349,7 +349,7 @@ if __name__ == "__main__":
     parser.add_argument('--fold', type=int, required=True, help='Cross-validation fold index (0-9)')
     parser.add_argument('--num_samples_per_instance', type=int, default=100, help='Number of training samples per instance (1-100)')
     parser.add_argument('--val_batch_size', type=int, default=1000, help='Validation batch size for TabPFN (default: 1000)')
-    parser.add_argument('--target_scale', type=str, default=None, help='Target scaling method (log, z-score, max, none)')
+    parser.add_argument('--target_scale', type=str, required=True, help='Target scaling method (log, z-score, max, none)')
     parser.add_argument('--subsample_method', type=str, default=None, help='Sampling method (instance-wise, flatten-random)')
     parser.add_argument('--context_size', type=int, default=None, help='Number of flattened training samples (default: None, use all)')
     parser.add_argument('--feature_drop_rate', type=float, default=None, help='Feature drop rate (default: None, use all features)')
