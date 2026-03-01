@@ -4,22 +4,27 @@ import torch.optim as optim
 import time
 from copy import deepcopy
 
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
 def loss_fn(y_true, y_pred):
     """
     Negative log-likelihood loss for log-normal distribution.
     y_true: tensor of shape [batch, 1]
-    y_pred: tensor of shape [batch, 2], first column σ, second column s -mu in log-space- (shape, scale)
+    y_pred: tensor of shape [batch, 2]
     """
     assert y_true.size(1) == 1, "y_true must be of shape [batch, 1]"
     assert y_pred.size(1) == 2, "y_pred must be of shape [batch, 2]"
+    assert len(y_true) == len(y_pred), "loss_fn: y_true and y_pred must have the same batch size"
 
     y_true = y_true.to(y_pred.device)
-    s = y_pred[:, 0:1]
-    scale = y_pred[:, 1:2]
+    shape = y_pred[:, 0:1]
+    scale = y_pred[:, 1:2]  # e^mu
     log_scale = torch.log(scale)
     log_true = torch.log(y_true)
-    help1 = 0.5 * ((log_true - log_scale) / s) ** 2
-    lh = -torch.log(s) - log_true - help1
+    help1 = 0.5 * (((log_true - log_scale) / shape) ** 2)
+    lh = -torch.log(shape) - log_true - help1
     return -lh.mean()
 
 class DistNet(nn.Module):
@@ -41,42 +46,41 @@ class DistNetModel:
     def __init__(
         self,
         n_input_features,
-        n_epohcs,
+        n_epochs,
         batch_size,
         wc_time_limit,
+        random_state,
         save_path=None,
         X_valid=None,
         y_valid=None,
         early_stopping=False,
         early_stopping_patience=50,
     ):
-        # as in the original DistNet paper
-        self.n_epochs = n_epohcs
+        set_seed(random_state)
+        self.n_epochs = n_epochs
+        self.expected_n_epochs = 1000
         self.wc_time_limit = wc_time_limit  # seconds
         self.batch_size = batch_size
         self.device = torch.device('cpu')
 
-        if save_path is None:
-            self.save_flag = False
-        else:
+        self.save_flag = save_path is not None
+        if self.save_flag:
             self.save_path = save_path
-            self.save_flag = True
 
         # validation data - direct device placement
-        if X_valid is not None and y_valid is not None:
+        self.validation_available = (X_valid is not None and y_valid is not None)
+        if self.validation_available:
             self.X_valid = torch.as_tensor(X_valid, dtype=torch.float32, device=self.device)
             self.y_valid = torch.as_tensor(y_valid, dtype=torch.float32, device=self.device)
-            self.validation_available = True
-        else:
-            self.validation_available = False
 
         self.early_stopping = early_stopping
-        self.early_stopping_patience = early_stopping_patience
         if self.early_stopping:
+            self.early_stopping_patience = early_stopping_patience
             assert self.validation_available, "Early stopping requires validation data"
             self.best_model_checkpoint = None
             self.best_val_loss = float('inf')
             self.epochs_no_improve = 0
+            self.best_epoch = 0  # epoch index where validation loss was minimised
 
         # model, optimizer, scheduler
         self.model = DistNet(n_input_features).to(self.device)
@@ -89,9 +93,9 @@ class DistNetModel:
             momentum=0.9,
             weight_decay=1e-4
         )
-        gamma = (final_lr / initial_lr) ** (1.0 / float(self.n_epochs))
+        gamma = (final_lr / initial_lr) ** (1.0 / float(self.expected_n_epochs))
         self.scheduler = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=gamma)
-
+    
     @classmethod
     def load_model(cls, load_path, n_input_features):
         """
@@ -104,22 +108,26 @@ class DistNetModel:
         Returns:
             DistNetModel instance with loaded weights
         """
+        model = DistNet(n_input_features)
+        model.load_state_dict(torch.load(load_path, map_location='cpu', weights_only=True))
+        model.eval()
+        
+        # Create a minimal instance for inference
         instance = cls.__new__(cls)
+        instance.model = model
         instance.device = torch.device('cpu')
-        instance.save_path = load_path
-        instance.model = DistNet(n_input_features).to(instance.device)
-        instance.model.load_state_dict(torch.load(load_path, map_location=instance.device))
-        instance.model.eval()
+        
         return instance
     
     def train(self, X_train, y_train):
-        assert X_train.ndim == 2, "X_train must have batch dimension"
-        assert y_train.ndim == 2, "y_train must have batch dimension"
+        assert X_train.ndim == 2 and y_train.ndim == 2, "X_train and y_train must have batch dimension"
+        assert len(X_train) == len(y_train), "X_train and y_train must have same length"
+
         self.model.train()
         X = torch.as_tensor(X_train, dtype=torch.float32, device=self.device)
         y = torch.as_tensor(y_train, dtype=torch.float32, device=self.device)
-        n_samples = X.size(0)
 
+        n_samples = X.size(0)
         start_time = time.time()
         for epoch in range(1, self.n_epochs + 1):
             epoch_loss = 0.0
@@ -131,7 +139,7 @@ class DistNetModel:
                 preds = self.model(bx)
                 loss = loss_fn(by, preds)
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1e-2)
                 self.optimizer.step()
                 epoch_loss += loss.item() * bx.size(0)
 
@@ -139,8 +147,8 @@ class DistNetModel:
             avg_train_loss = epoch_loss / n_samples
             elapsed = time.time() - start_time
 
+            val_loss = None
             if self.validation_available:
-                assert self.X_valid is not None and self.y_valid is not None, "Validation data not provided"
                 self.model.eval()
                 with torch.no_grad():
                     vpred = self.model(self.X_valid)
@@ -150,20 +158,19 @@ class DistNetModel:
                     if val_loss < self.best_val_loss:
                         self.best_val_loss = val_loss
                         self.best_model_checkpoint = deepcopy(self.model.state_dict())
+                        self.best_epoch = epoch
                         self.epochs_no_improve = 0
                     else:
                         self.epochs_no_improve += 1
 
                     if self.epochs_no_improve >= self.early_stopping_patience:
-                        print(f"Early stopping at epoch {epoch}. Best validation loss: {self.best_val_loss:.4f}")
+                        print(f"Early stopping | Best epoch: {epoch-self.early_stopping_patience}. Best validation loss: {self.best_val_loss:.4f}")
                         break
-
-                print(f"Epoch {epoch}/{self.n_epochs} | Train {avg_train_loss:.4f} | Val {val_loss:.4f} | LR {self.scheduler.get_last_lr()[0]:.6f} | {elapsed:.1f}s")
                 self.model.train()
 
-            else:
-                if epoch == 1 or epoch % 100 == 0:
-                    print(f"Epoch {epoch}/{self.n_epochs} | Loss {avg_train_loss:.4f} | LR {self.scheduler.get_last_lr()[0]:.6f} | {elapsed:.1f}s")
+            if epoch == 1 or epoch % 100 == 0:
+                val_str = f"{val_loss:.4f}" if val_loss is not None else "Unavailable"
+                print(f"Epoch {epoch}/{self.n_epochs} | Train Loss {avg_train_loss:.4f} | Validation Loss {val_str} LR {self.scheduler.get_last_lr()[0]:.6f} | {elapsed:.1f}s")
 
             if elapsed > self.wc_time_limit:
                 print(f"Time limit reached ({elapsed:.1f}s), stopping training.")
@@ -182,8 +189,8 @@ class DistNetModel:
         torch.save(self.model.state_dict(), self.save_path)
         print(f"Model saved to {self.save_path}")
 
-    def predict(self, X):
+    def predict(self, X_test):
         self.model.eval()
-        X_t = torch.as_tensor(X, dtype=torch.float32, device=self.device)
+        X_t = torch.as_tensor(X_test, dtype=torch.float32, device=self.device)
         with torch.no_grad():
             return self.model(X_t).cpu().numpy()

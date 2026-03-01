@@ -1,4 +1,6 @@
-tabpfn
-numpy
-scipy
-scikit-learn
+tabpfn==6.4.1
+numpy==2.3.5
+scipy==1.17.0
+scikit-learn==1.8.0
+torch==2.10.0+cu130
+torchvision==0.25.0+cu130

@@ -10,7 +10,7 @@ def calculate_llh_instance_distnet(observations, shape, scale, target_scale):
     Args:
         observations: Array of max-scaled observed values for a single instance
         shape: Shape parameter of lognormal distribution
-        scale: Scale parameter of lognormal distribution
+        scale: Scale parameter of lognormal distribution (e^mu)
     
     Returns:
         mean log-likelihood

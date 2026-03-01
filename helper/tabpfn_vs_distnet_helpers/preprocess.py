@@ -127,20 +127,6 @@ def delete_constant_features(tra_X, val_X):
     val_X = np.delete(val_X, del_idx, axis=1)
     return tra_X, val_X
 
-def scale_features(tra_X, val_X, scal="meanstd"):
-    # Min/Max Scale instance features
-    if scal == "minmax":
-        min_, max_ = det_transformation(tra_X)
-        tra_X = (tra_X - min_) / max_
-        val_X = (val_X - min_) / max_
-    elif scal == "meanstd":
-        mean_ = tra_X.mean(axis=0)
-        std_ = tra_X.std(axis=0)
-        tra_X = (tra_X - mean_) / std_
-        val_X = (val_X - mean_) / std_
-
-    return tra_X, val_X
-
 def preprocess_features(tra_X, *arrays, scal="meanstd"):
     """
     Preprocesses training data and applies the same transformation to any number of 
@@ -150,6 +136,7 @@ def preprocess_features(tra_X, *arrays, scal="meanstd"):
     
     # --- 1. Remove Constant Features ---
     # Calculate indices to delete based ONLY on training data
+    tra_X = tra_X.copy()
     del_idx = det_constant_features(tra_X)
     
     # Apply deletion to training data
