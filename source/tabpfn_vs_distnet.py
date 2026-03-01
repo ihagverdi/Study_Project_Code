@@ -313,7 +313,6 @@ def train_test_model(
 
         results_dict = {
             'model_name': 'tabpfn',
-            'model_config': model.__dict__,
             'scenario': scenario,
             'fold': fold,
             'seed_context': seed_context,
