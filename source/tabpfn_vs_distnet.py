@@ -149,12 +149,6 @@ def train_test_model(
 
         N = X_train_flat.shape[0]
         early_stopping_patience = 50
-
-        distnet_model_name = (f"model_{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_{seed_samples_per_instance}"
-                              f"{feature_drop_rate}_{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}.pt")
-        os.makedirs(os.path.join(save_dir, "distnet_models"), exist_ok=True)
-        distnet_save_path = os.path.join(save_dir, "distnet_models", distnet_model_name)
-
         E_final = None
         if early_stopping and N < 512:
             # 5-fold CV to find the optimal epoch, then retrain on the full training set.
@@ -192,7 +186,7 @@ def train_test_model(
                 n_epochs=E_final,
                 batch_size=batch_size,
                 wc_time_limit=wc_time_limit,
-                save_path=distnet_save_path,
+                save_path=None,
                 early_stopping=False,
                 random_state=RANDOM_STATE,
             )
@@ -210,7 +204,7 @@ def train_test_model(
                 n_epochs=n_epochs,
                 batch_size=batch_size,
                 wc_time_limit=wc_time_limit,
-                save_path=distnet_save_path,
+                save_path=None,
                 X_valid=X_valid_flat,
                 y_valid=y_valid_flat,
                 early_stopping=True,
@@ -227,7 +221,7 @@ def train_test_model(
                 n_epochs=n_epochs,
                 batch_size=batch_size,
                 wc_time_limit=wc_time_limit,
-                save_path=distnet_save_path,
+                save_path=None,
                 early_stopping=False,
                 random_state=RANDOM_STATE,
             )
