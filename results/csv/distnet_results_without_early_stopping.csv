@@ -1,0 +1,8 @@
+Scenario,Mean NLLH (10-fold),Std NLLH
+clasp_factoring,-0.1533,0.0252
+lpg-zeno,-0.8497,0.0079
+saps-CVVAR,-0.5687,0.0747
+spear_qcp,-1.0988,0.0218
+spear_swgcp,-0.4694,0.0121
+yalsat_qcp,-0.7498,0.0111
+yalsat_swgcp,-0.8046,0.0112
