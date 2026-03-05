@@ -6,7 +6,7 @@ from sklearn.model_selection import KFold, train_test_split
 import torch
 import time
 from helper.tabpfn_vs_distnet_helpers import data_source_release, load_data
-from helper.tabpfn_vs_distnet_helpers.preprocess import preprocess_features
+from helper.tabpfn_vs_distnet_helpers.preprocess import delete_constant_features, preprocess_features
 
 RANDOM_STATE=0  # From original distnet paper
 
@@ -51,8 +51,13 @@ def subsample_features(X_train, *arrays, drop_rate, seed):
 
     rng = np.random.default_rng(seed=seed)
     n_features = X_train.shape[1]
-    feature_idx = rng.choice(n_features, size=int(n_features * (1 - drop_rate)), replace=False)
 
+    if drop_rate == 1:  # dropping all but one feature
+        size_features = 1
+    else:
+        size_features = max(1, int(n_features * (1 - drop_rate)))
+        
+    feature_idx = rng.choice(n_features, size=size_features, replace=False)
     processed_arrays = [arr[:, feature_idx] for arr in arrays]
 
     return (X_train[:, feature_idx], *processed_arrays)
@@ -126,17 +131,23 @@ def train_test_model(
     X_train_flat = np.repeat(X_train, repeats=num_samples_per_instance, axis=0)
     y_train_flat = y_train.reshape(-1, 1)
 
+
     if context_size is not None:
         assert seed_context is not None, "seed_context must be provided when context_size is specified."
-        assert 0 < context_size <= X_train_flat.shape[0], "invalid context_size value."
+        assert 1 <= context_size <= X_train_flat.shape[0], "invalid context_size value."
         if context_size < X_train_flat.shape[0]:
             print(f"Subsampling the training data to context size {context_size} using method '{subsample_method}'")
             X_train_flat, y_train_flat = subsample_training_data(X_train_flat, y_train_flat, context_size=context_size, seed=seed_context, subsample_method=subsample_method)
-            
+    
+    # remove constant features
+    X_train_flat, X_test = delete_constant_features(X_train_flat, X_test)
+
     if feature_drop_rate is not None:
         assert seed_features is not None, "seed_features must be provided when feature_drop_rate > 0.0"
-        assert 0.0 < feature_drop_rate < 1.0, "feature_drop_rate must be in (0.0, 1.0)"
+        assert 0.0 < feature_drop_rate <= 1.0, "feature_drop_rate must be in (0.0, 1.0]"
         print(f"Sampling features with drop rate {feature_drop_rate}")
+        if feature_drop_rate == 1:
+            print("Dropping all but one feature...")
         X_train_flat, X_test = subsample_features(X_train_flat, X_test, drop_rate=feature_drop_rate, seed=seed_features)
     
     results_dict = None  # the ultimate dict to store after model fit&predict
@@ -270,7 +281,6 @@ def train_test_model(
             }
         }
         print(f"DistNet Test NLLH: {nllh:.4f}, fit and predict time: {(distnet_fit_time+distnet_predict_time):.2f} seconds.")
-
 
     elif model_name == 'tabpfn':
         from tabpfn import TabPFNRegressor

@@ -107,7 +107,7 @@ def det_constant_features(X):
     diff = max_ - min_
 
     det_idx = np.where(diff <= 10e-10)
-    # print("Discarding %d (%d) features" % (det_idx[0].shape[0], X.shape[1]))
+    print(f"Discarding {det_idx[0].shape[0]} features (out of {X.shape[1]})")
     return det_idx
 
 
@@ -120,12 +120,12 @@ def det_transformation(X):
     return min_, max_
 
 
-def delete_constant_features(tra_X, val_X):
+def delete_constant_features(tra_X, *arrays):
     # Remove constant features
     del_idx = det_constant_features(tra_X)
     tra_X = np.delete(tra_X, del_idx, axis=1)
-    val_X = np.delete(val_X, del_idx, axis=1)
-    return tra_X, val_X
+    processed_arrays = [np.delete(arr, del_idx, axis=1) for arr in arrays]
+    return tra_X, *processed_arrays
 
 def preprocess_features(tra_X, *arrays, scal="meanstd"):
     """
@@ -133,20 +133,7 @@ def preprocess_features(tra_X, *arrays, scal="meanstd"):
     additional arrays (validation, test, etc).
     :returns: tuple of processed arrays, with training data first
     """
-    
-    # --- 1. Remove Constant Features ---
-    # Calculate indices to delete based ONLY on training data
-    tra_X = tra_X.copy()
-    del_idx = det_constant_features(tra_X)
-    
-    # Apply deletion to training data
-    tra_X = np.delete(tra_X, del_idx, axis=1)
-    
-    # Apply deletion to all other arrays in the list
-    # We use a list comprehension to create a new list of modified arrays
-    processed_arrays = [np.delete(arr, del_idx, axis=1) for arr in arrays]
 
-    # --- 2. Scaling ---
     if scal == "minmax":
         # Calculate scaling parameters from training data
         min_, max_ = det_transformation(tra_X)
@@ -163,7 +150,7 @@ def preprocess_features(tra_X, *arrays, scal="meanstd"):
         std_ = tra_X.std(axis=0)
         
         # Safety: prevent division by zero if a feature has 0 variance 
-        # (should be handled by step 1, but good practice to double check)
+        # (should be handled by delete_constant_features, but good practice to double check)
         std_[std_ == 0] = 1.0
         
         # Apply to training data
