@@ -142,7 +142,7 @@ def preprocess_features(tra_X, *arrays, scal="meanstd"):
         tra_X = (tra_X - min_) / max_
         
         # Apply to other arrays
-        processed_arrays = [(arr - min_) / max_ for arr in processed_arrays]
+        processed_arrays = [(arr - min_) / max_ for arr in arrays]
         
     elif scal == "meanstd":
         # Calculate scaling parameters from training data
@@ -157,7 +157,7 @@ def preprocess_features(tra_X, *arrays, scal="meanstd"):
         tra_X = (tra_X - mean_) / std_
         
         # Apply to other arrays
-        processed_arrays = [(arr - mean_) / std_ for arr in processed_arrays]
+        processed_arrays = [(arr - mean_) / std_ for arr in arrays]
 
     # Return training data + unpacked processed arrays
     return (tra_X, *processed_arrays)
