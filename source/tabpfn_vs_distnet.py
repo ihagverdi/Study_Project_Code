@@ -274,6 +274,7 @@ def train_test_model(
             'wc_time_limit': wc_time_limit,
             'test_preds': y_pred,
             'random_state': RANDOM_STATE,
+            'n_features': X_train_flat.shape[1],
             'result_metrics': {
                 'nllh': nllh,
                 'fit_time': distnet_fit_time,
@@ -337,6 +338,7 @@ def train_test_model(
             'save_dir': save_dir,
             'val_batch_size': val_batch_size,
             'random_state': RANDOM_STATE,
+            'n_features': X_train_flat.shape[1],
             'result_metrics': {
                 'nllh': nllh,
                 'fit_time': tabpfn_fit_time,
