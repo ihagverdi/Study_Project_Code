@@ -131,7 +131,6 @@ def train_test_model(
     X_train_flat = np.repeat(X_train, repeats=num_samples_per_instance, axis=0)
     y_train_flat = y_train.reshape(-1, 1)
 
-
     if context_size is not None:
         assert seed_context is not None, "seed_context must be provided when context_size is specified."
         assert 1 <= context_size <= X_train_flat.shape[0], "invalid context_size value."
@@ -146,8 +145,6 @@ def train_test_model(
         assert seed_features is not None, "seed_features must be provided when feature_drop_rate > 0.0"
         assert 0.0 < feature_drop_rate <= 1.0, "feature_drop_rate must be in (0.0, 1.0]"
         print(f"Sampling features with drop rate {feature_drop_rate}")
-        if feature_drop_rate == 1:
-            print("Dropping all but one feature...")
         X_train_flat, X_test = subsample_features(X_train_flat, X_test, drop_rate=feature_drop_rate, seed=seed_features)
     
     results_dict = None  # the ultimate dict to store after model fit&predict
