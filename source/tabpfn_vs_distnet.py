@@ -340,7 +340,7 @@ def train_test_model(
                 'nllh': nllh,
                 'fit_time': tabpfn_fit_time,
                 'predict_time': tabpfn_predict_time,
-            }
+            },
         }
         print(f"TabPFN Test NLLH: {nllh:.4f}, fit and predict time: {(tabpfn_fit_time+tabpfn_predict_time):.2f} seconds.")
         
