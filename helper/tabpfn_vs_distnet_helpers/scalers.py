@@ -13,7 +13,7 @@ def max_scaling(y_train, *arrays):
     # Apply scale to all other arrays
     processed_arrays = [arr * scale for arr in arrays]
     
-    return (y_train_scaled, *processed_arrays)
+    return (y_train_scaled, *processed_arrays, scale)
 
 def log_scaling(y_train, *arrays):
     """

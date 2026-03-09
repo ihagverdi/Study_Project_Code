@@ -158,6 +158,7 @@ def train_test_model(
         N = X_train_flat.shape[0]
         early_stopping_patience = 50
         E_final = None
+        y_scale = None
         if early_stopping and N < 512:
             # 5-fold CV to find the optimal epoch, then retrain on the full training set.
             print(f"[DistNet] N={N} < 512: running 5-fold CV to determine E_final.")
@@ -167,7 +168,7 @@ def train_test_model(
                 X_f_tr, X_f_val = X_train_flat[tr_idx], X_train_flat[val_idx]
                 y_f_tr, y_f_val = y_train_flat[tr_idx], y_train_flat[val_idx]
                 X_f_tr, X_f_val = preprocess_features(X_f_tr, X_f_val, scal="meanstd")
-                y_f_tr, y_f_val = max_scaling(y_f_tr, y_f_val)
+                y_f_tr, y_f_val, _ = max_scaling(y_f_tr, y_f_val)
                 fold_model = DistNetModel(
                     n_input_features=X_f_tr.shape[1],
                     n_epochs=n_epochs,
@@ -188,7 +189,7 @@ def train_test_model(
 
             # Retrain on the full training set for exactly E_final epochs (no hold-out).
             X_train_flat, X_test = preprocess_features(X_train_flat, X_test, scal="meanstd")
-            y_train_flat, y_test = max_scaling(y_train_flat, y_test)
+            y_train_flat, y_test, y_scale = max_scaling(y_train_flat, y_test)
             model = DistNetModel(
                 n_input_features=X_train_flat.shape[1],
                 n_epochs=E_final,
@@ -206,7 +207,7 @@ def train_test_model(
                 X_train_flat, y_train_flat, test_size=0.2, random_state=RANDOM_STATE
             )
             X_train_flat, X_valid_flat, X_test = preprocess_features(X_train_flat, X_valid_flat, X_test, scal="meanstd")
-            y_train_flat, y_valid_flat, y_test = max_scaling(y_train_flat, y_valid_flat, y_test)
+            y_train_flat, y_valid_flat, y_test, y_scale = max_scaling(y_train_flat, y_valid_flat, y_test)
             model = DistNetModel(
                 n_input_features=X_train_flat.shape[1],
                 n_epochs=n_epochs,
@@ -223,7 +224,7 @@ def train_test_model(
         else:
             # No early stopping: train on the full training set for n_epochs.
             X_train_flat, X_test = preprocess_features(X_train_flat, X_test, scal="meanstd")
-            y_train_flat, y_test = max_scaling(y_train_flat, y_test)
+            y_train_flat, y_test, y_scale = max_scaling(y_train_flat, y_test)
             model = DistNetModel(
                 n_input_features=X_train_flat.shape[1],
                 n_epochs=n_epochs,
@@ -248,6 +249,7 @@ def train_test_model(
 
         nllh = calculate_nllh_distnet(y_test, y_pred, target_scale=target_scale)
 
+        assert y_scale is not None, "y_scale should not be None for DistNet when using max_scaling."
         results_dict = {
             'model_name': 'distnet',
             'model_config': model.model.state_dict(),
@@ -272,6 +274,7 @@ def train_test_model(
             'test_preds': y_pred,
             'random_state': RANDOM_STATE,
             'n_features': X_train_flat.shape[1],
+            'y_scale': y_scale,
             'result_metrics': {
                 'nllh': nllh,
                 'fit_time': distnet_fit_time,
@@ -288,7 +291,7 @@ def train_test_model(
         # Scale y (runtime) values
         args = None
         if target_scale == 'max':
-            y_train_flat, y_test = max_scaling(y_train_flat, y_test)
+            y_train_flat, y_test, _ = max_scaling(y_train_flat, y_test)
         elif target_scale == 'log':
             y_train_flat, y_test = log_scaling(y_train_flat, y_test)
         elif target_scale == "z-score":
@@ -336,6 +339,7 @@ def train_test_model(
             'val_batch_size': val_batch_size,
             'random_state': RANDOM_STATE,
             'n_features': X_train_flat.shape[1],
+            'scaler_args': args,
             'result_metrics': {
                 'nllh': nllh,
                 'fit_time': tabpfn_fit_time,

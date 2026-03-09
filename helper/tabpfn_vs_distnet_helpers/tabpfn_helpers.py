@@ -1,7 +1,7 @@
 import time
 import numpy as np
 import torch
-from helper.pfn_helpers import logPDF_pfn
+from helper.pfn_helpers import logpdf_tabpfn
 
 def predict_and_calculate_nllh_tabpfn(model, X_test, y_test, validation_batch_size, target_scale, args=None):
     '''
@@ -47,7 +47,7 @@ def predict_and_calculate_nllh_tabpfn(model, X_test, y_test, validation_batch_si
                 assert obs_t.ndim == 1, "Each target instance must be a 1D array"
                 logits_rep = torch.repeat_interleave(logits_i, repeats=obs_t.shape[0], dim=0)
 
-                nlog_pdf = -logPDF_pfn(logits=logits_rep, y=obs_t, borders=borders)  # -log(p) of shape (n,)
+                nlog_pdf = -logpdf_tabpfn(logits=logits_rep, y=obs_t, borders=borders)  # -log(p) of shape (n,)
 
                 # Cap infinite values to a maximum penalty (50 nats ≈ prob of 2e-22)
                 max_nll = 50.0
