@@ -325,20 +325,21 @@ def batch_predict_tabpfn(model, X_test, validation_batch_size):
     - validation_batch_size: Batch size for processing validation data.
     
     Returns:
-    - tabpfn_preds, tabpfn_predict_time.
+    - tabpfn_preds.
     '''
     assert validation_batch_size > 0, "validation_batch_size must be a positive integer"
 
     n_validation_instances = X_test.shape[0]  # total number of validation instances
     validation_batch_size = min(validation_batch_size, n_validation_instances)
-    tabpfn_predict_time = 0.0
     tabpfn_preds = []
     for start in range(0, n_validation_instances, validation_batch_size):
         X_batch = X_test[start: start + validation_batch_size]
         with torch.no_grad():
-            tabpfn_predict_time_start = time.time()
             preds = model.predict(X_batch, output_type="full")
-            tabpfn_predict_time += (time.time() - tabpfn_predict_time_start)
+
+            if isinstance(preds, torch.Tensor):
+                preds = preds.cpu()
+                
             tabpfn_preds.append(preds)
             
-    return tabpfn_preds, tabpfn_predict_time
+    return tabpfn_preds

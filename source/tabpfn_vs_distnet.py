@@ -1,3 +1,4 @@
+import contextlib
 import os
 import argparse
 import pickle
@@ -7,9 +8,54 @@ import torch
 import time
 from helper.tabpfn_vs_distnet_helpers import data_source_release, load_data
 from helper.tabpfn_vs_distnet_helpers.preprocess import delete_constant_features, preprocess_features
+import gc
 
 RANDOM_STATE=0  # From original distnet paper
 
+@contextlib.contextmanager
+def track_gpu_memory_and_time(device_input):
+    is_cuda = False
+    try:
+        device = torch.device(device_input)
+        if device.type == 'cuda' and torch.cuda.is_available():
+            is_cuda = True
+    except Exception:
+        pass
+
+    # Add time_s to the dictionary
+    stats = {"baseline_mb": 0.0, "peak_mb": 0.0, "spike_mb": 0.0, "time_s": 0.0}
+
+    if is_cuda:
+        gc.collect() 
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(device)
+        
+        # Sync before starting the timer to ensure a clean slate
+        torch.cuda.synchronize(device)
+        baseline_mem_bytes = torch.cuda.memory_allocated(device)
+    
+    # --- START CLOCK ---
+    start_time = time.perf_counter()
+    
+    yield stats
+    
+    # --- STOP CLOCK ---
+    # First, force GPU to finish the user's operation
+    if is_cuda:
+        torch.cuda.synchronize(device)
+        
+    end_time = time.perf_counter()
+    stats["time_s"] = end_time - start_time
+    
+    # Calculate memory
+    if is_cuda:
+        peak_mem_bytes = torch.cuda.max_memory_allocated(device)
+        operation_spike_bytes = peak_mem_bytes - baseline_mem_bytes
+        
+        stats["baseline_mb"] = baseline_mem_bytes / (1024 ** 2)
+        stats["peak_mb"] = peak_mem_bytes / (1024 ** 2)
+        stats["spike_mb"] = operation_spike_bytes / (1024 ** 2)
+        
 def subsample_training_data(X_train_flat, y_train_flat, context_size, seed, subsample_method):
     """
     Subsamples the flattened dataset. Currently supports 'flatten-random' which randomly samples from the flattened training data.
@@ -234,17 +280,17 @@ def train_test_model(
                 random_state=RANDOM_STATE,
             )
 
-        distnet_fit_time_start = time.time()
+        distnet_fit_time_start = time.perf_counter()
         model.train(X_train_flat, y_train_flat)
-        distnet_fit_time = time.time() - distnet_fit_time_start
+        distnet_fit_time = time.perf_counter() - distnet_fit_time_start
 
         # For direct early stopping, record the best epoch found.
         if early_stopping and N >= 512:
             E_final = model.best_epoch
 
-        distnet_predict_time_start = time.time()
+        distnet_predict_time_start = time.perf_counter()
         y_pred = model.predict(X_test)
-        distnet_predict_time = time.time() - distnet_predict_time_start
+        distnet_predict_time = time.perf_counter() - distnet_predict_time_start
 
         assert y_scale is not None, "y_scale should not be None for DistNet when using max_scaling."
         results_dict = {
@@ -294,20 +340,46 @@ def train_test_model(
             args = [mean, std]
         elif target_scale == "none":
             pass  # no scaling
-
+        
         # no preprocessing of features for TabPFN
         # initialize and train model
         device = torch.device('cuda' if (torch.cuda.is_available() and not use_cpu) else 'cpu')
         print(f"TabPFN using device: {device}")
 
+        mem_time_stats = {
+            "device": device,
+            "fit": {
+                "baseline_mb": None,
+                "peak_mb": None,
+                "spike_mb": None,
+                "time_s": None,
+            },
+            "predict": {
+                "baseline_mb": None,
+                "peak_mb": None,
+                "spike_mb": None,
+                "time_s": None,
+            },
+        }
+
         model = TabPFNRegressor(device=device, random_state=RANDOM_STATE, ignore_pretraining_limits=True)
 
-        tabpfn_fit_time_start = time.time()
-        model.fit(X_train_flat, y_train_flat.ravel())
-        tabpfn_fit_time = time.time() - tabpfn_fit_time_start
+        with track_gpu_memory_and_time(device) as stats:
+            model.fit(X_train_flat, y_train_flat.ravel())
+        
+        mem_time_stats["fit"]["baseline_mb"] = stats["baseline_mb"]
+        mem_time_stats["fit"]["peak_mb"] = stats["peak_mb"]
+        mem_time_stats["fit"]["spike_mb"] = stats["spike_mb"]
+        mem_time_stats["fit"]["time_s"] = stats["time_s"]
 
         # evaluate model
-        tabpfn_preds_full, tabpfn_predict_time = batch_predict_tabpfn(model, X_test, validation_batch_size=val_batch_size)
+        with track_gpu_memory_and_time(device) as stats:
+            tabpfn_preds_full = batch_predict_tabpfn(model, X_test, validation_batch_size=val_batch_size)
+        
+        mem_time_stats["predict"]["baseline_mb"] = stats["baseline_mb"]
+        mem_time_stats["predict"]["peak_mb"] = stats["peak_mb"]
+        mem_time_stats["predict"]["spike_mb"] = stats["spike_mb"]
+        mem_time_stats["predict"]["time_s"] = stats["time_s"]
 
         tabpfn_preds_full_fileName = (f"{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_{seed_samples_per_instance}_{feature_drop_rate}_"
                          f"{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}_{'cpu' if use_cpu else 'gpu'}_test_preds.pkl")
@@ -335,10 +407,7 @@ def train_test_model(
             'random_state': RANDOM_STATE,
             'n_features': X_train_flat.shape[1],
             'scaler_args': args,
-            'result_metrics': {
-                'fit_time': tabpfn_fit_time,
-                'predict_time': tabpfn_predict_time,
-            },
+            'result_metrics': mem_time_stats,
         }
         
     assert results_dict is not None, "results_dict is NONE"
@@ -377,7 +446,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     print(f"🧪 Starting the experiment with the following configuration:\n{args}")
-    start = time.time()
+    start = time.perf_counter()
     train_test_model(
         model_name=args.model,
         scenario=args.scenario,
@@ -398,5 +467,5 @@ if __name__ == "__main__":
         wc_time_limit=args.wc_time_limit,
         seed_samples_per_instance=args.seed_samples_per_instance
     )
-    end = time.time()
+    end = time.perf_counter()
     print(f"✅ Experiment completed in {end - start:.2f} seconds.")
