@@ -268,9 +268,9 @@ def calculate_all_distribution_metrics_tabpfn_logspace(
         crps_batch = cvm_distance + empirical_spread
 
         
-        all_w1.append(w1_batch)
-        all_crps.append(crps_batch)
-        all_ks.append(ks_batch)
+        all_w1.append(w1_batch.detach().cpu())
+        all_crps.append(crps_batch.detach().cpu())
+        all_ks.append(ks_batch.detach().cpu())
         
         # =========================================================
         # 5. VECTORIZED NLLH (Evaluated in log-space)
@@ -291,7 +291,7 @@ def calculate_all_distribution_metrics_tabpfn_logspace(
         #     bias = -torch.log(max_exp_minus_1)
 
         batch_nllh = nlog_pdf.mean(dim=1) + bias
-        all_nllh.append(batch_nllh)
+        all_nllh.append(batch_nllh.detach().cpu())
         
         instance_idx += batch_size
         

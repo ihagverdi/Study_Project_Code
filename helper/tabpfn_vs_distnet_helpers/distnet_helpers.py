@@ -130,6 +130,6 @@ def calculate_all_distribution_metrics_distnet_logspace(
         "KS_std": all_ks.std().item(),
     }
     
-    instance_summary = {"NLLH": all_nllh, "CRPS": all_crps, "Wasserstein": all_w1, "KS": all_ks}
+    instance_summary = {"NLLH": all_nllh.detach().cpu(), "CRPS": all_crps.detach().cpu(), "Wasserstein": all_w1.detach().cpu(), "KS": all_ks.detach().cpu()}
 
     return metrics_summary, instance_summary
