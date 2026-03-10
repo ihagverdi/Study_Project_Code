@@ -150,7 +150,6 @@ def train_test_model(
     results_dict = None  # the ultimate dict to store after model fit&predict
     if model_name == 'distnet':
         from helper.tabpfn_vs_distnet_helpers.distnet_lognormal import DistNetModel
-        from helper.tabpfn_vs_distnet_helpers.distnet_helpers import calculate_nllh_distnet
         from helper.tabpfn_vs_distnet_helpers.scalers import max_scaling
 
         assert target_scale in ['max'], "DistNet only supports 'max' scaling currently."
@@ -247,8 +246,6 @@ def train_test_model(
         y_pred = model.predict(X_test)
         distnet_predict_time = time.time() - distnet_predict_time_start
 
-        nllh = calculate_nllh_distnet(y_test, y_pred, target_scale=target_scale)
-
         assert y_scale is not None, "y_scale should not be None for DistNet when using max_scaling."
         results_dict = {
             'model_name': 'distnet',
@@ -276,17 +273,15 @@ def train_test_model(
             'n_features': X_train_flat.shape[1],
             'y_scale': y_scale,
             'result_metrics': {
-                'nllh': nllh,
                 'fit_time': distnet_fit_time,
                 'predict_time': distnet_predict_time,
             }
         }
-        print(f"DistNet Test NLLH: {nllh:.4f}, fit and predict time: {(distnet_fit_time+distnet_predict_time):.2f} seconds.")
 
     elif model_name == 'tabpfn':
         from tabpfn import TabPFNRegressor
         from helper.tabpfn_vs_distnet_helpers.scalers import log_scaling, max_scaling, z_score_scaling
-        from helper.tabpfn_vs_distnet_helpers.tabpfn_helpers import predict_and_calculate_nllh_tabpfn
+        from helper.pfn_helpers import batch_predict_tabpfn
         
         # Scale y (runtime) values
         args = None
@@ -312,7 +307,7 @@ def train_test_model(
         tabpfn_fit_time = time.time() - tabpfn_fit_time_start
 
         # evaluate model
-        nllh, tabpfn_preds_full, tabpfn_predict_time = predict_and_calculate_nllh_tabpfn(model, X_test, y_test, validation_batch_size=val_batch_size, target_scale=target_scale, args=args)
+        tabpfn_preds_full, tabpfn_predict_time = batch_predict_tabpfn(model, X_test, validation_batch_size=val_batch_size)
 
         tabpfn_preds_full_fileName = (f"{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_{seed_samples_per_instance}_{feature_drop_rate}_"
                          f"{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}_{'cpu' if use_cpu else 'gpu'}_test_preds.pkl")
@@ -341,12 +336,10 @@ def train_test_model(
             'n_features': X_train_flat.shape[1],
             'scaler_args': args,
             'result_metrics': {
-                'nllh': nllh,
                 'fit_time': tabpfn_fit_time,
                 'predict_time': tabpfn_predict_time,
             },
         }
-        print(f"TabPFN Test NLLH: {nllh:.4f}, fit and predict time: {(tabpfn_fit_time+tabpfn_predict_time):.2f} seconds.")
         
     assert results_dict is not None, "results_dict is NONE"
     results_file_name = (f"{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_{seed_samples_per_instance}_{feature_drop_rate}_"
