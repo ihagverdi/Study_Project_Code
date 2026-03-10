@@ -243,10 +243,30 @@ def calculate_all_distribution_metrics_tabpfn_logspace(
         cdf_diff = F_tab - F_emp
         abs_cdf_diff = torch.abs(cdf_diff)
         
-        # Integration is over dz, returning CRPS in log-units (interpretation: Relative Error)
         w1_batch = torch.trapezoid(abs_cdf_diff, x=z_grid, dim=1)
-        crps_batch = torch.trapezoid(cdf_diff ** 2, x=z_grid, dim=1) 
         ks_batch = torch.max(abs_cdf_diff, dim=1)[0]               
+
+        # Integration is over dz, returning CRPS in log-units (interpretation: Relative Error)
+        # CRPS calculation
+        # 1. Base integral: the Cramér–von Mises distance (requires grid)
+        cvm_distance = torch.trapezoid(cdf_diff ** 2, x=z_grid, dim=1)
+        # 2. Exact Empirical Spread (Calculated directly from observations)
+        # Sort the ground-truth observations along the instance dimension
+        z_sorted = torch.sort(batch_z_orig, dim=1)[0]
+        
+        # Calculate the physical distance between consecutive sorted observations
+        diffs = z_sorted[:, 1:] - z_sorted[:, :-1]  # shape: (batch_size, N-1)
+        
+        # Generate the exact probability weights for each rectangle
+        N = batch_z_orig.shape[1]
+        i = torch.arange(1, N, device=device).float()
+        weights = (i / N) * (1.0 - i / N)           # shape: (N-1,)
+        
+        # Compute exact integral of the spread via dot product
+        empirical_spread = torch.sum(weights * diffs, dim=1) # shape: (batch_size,)
+        
+        crps_batch = cvm_distance + empirical_spread
+
         
         all_w1.append(w1_batch)
         all_crps.append(crps_batch)

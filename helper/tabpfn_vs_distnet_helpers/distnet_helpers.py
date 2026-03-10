@@ -81,9 +81,30 @@ def calculate_all_distribution_metrics_distnet_logspace(
     abs_cdf_diff = torch.abs(cdf_diff)
     
     # Integration over dz
-    all_w1 = torch.trapezoid(abs_cdf_diff, x=z_grid, dim=1)      
-    all_crps = torch.trapezoid(cdf_diff ** 2, x=z_grid, dim=1)   
+    all_w1 = torch.trapezoid(abs_cdf_diff, x=z_grid, dim=1)  
     all_ks = torch.max(abs_cdf_diff, dim=1)[0]                   
+
+    # Integration is over dz, returning CRPS in log-units (interpretation: Relative Error)
+    # CRPS calculation
+    # 1. Base integral: the Cramér–von Mises distance (requires grid)
+    cvm_distance = torch.trapezoid(cdf_diff ** 2, x=z_grid, dim=1)
+
+    # 2. Exact Empirical Spread (Calculated directly from observations)
+    # Sort the ground-truth observations along the instance dimension
+    z_sorted = torch.sort(z_test_orig, dim=1)[0]
+    
+    # Calculate the physical distance between consecutive sorted observations
+    diffs = z_sorted[:, 1:] - z_sorted[:, :-1]  # shape: (batch_size, N-1)
+    
+    # Generate the exact probability weights for each rectangle
+    N = z_test_orig.shape[1]
+    i = torch.arange(1, N, device=device).float()
+    weights = (i / N) * (1.0 - i / N)           # shape: (N-1,)
+    
+    # Compute exact integral of the spread via dot product
+    empirical_spread = torch.sum(weights * diffs, dim=1) # shape: (batch_size,)
+    
+    all_crps = cvm_distance + empirical_spread
 
     # =========================================================
     # 5. VECTORIZED NLLH (in log-space)
