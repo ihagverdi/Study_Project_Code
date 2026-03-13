@@ -14,7 +14,7 @@ from tabpfn_project.helper.preprocess import (
 )
 
 # import globals
-from tabpfn_project.helper.globals import RANDOM_STATE
+from tabpfn_project.globals import RANDOM_STATE
 from sklearn.model_selection import KFold, train_test_split
 
 
