@@ -16,7 +16,7 @@ from tabpfn_project.helper.preprocess import (
 # import globals
 from tabpfn_project.globals import RANDOM_STATE
 from sklearn.model_selection import KFold, train_test_split
-
+from tabpfn_project.paths import RESULTS_DIR
 
 @contextlib.contextmanager
 def track_gpu_memory_and_time(device_input):
@@ -137,7 +137,9 @@ def train_test_model(
     assert 0 <= fold <= 9, "Fold must be between 0 and 9"
     
     # Create save directory if it doesn't exist
-    os.makedirs(save_dir, exist_ok=True)
+    clean_name = save_dir.lstrip('/\\')
+    save_dir = RESULTS_DIR / clean_name
+    save_dir.mkdir(parents=True, exist_ok=True)
 
     # Get scenario configuration and data
     sc_dict = data_source_release.get_sc_dict()
