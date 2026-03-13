@@ -1,0 +1,28 @@
+[project]
+name = "tabpfn_project"
+version = "0.1.0"
+description = "My AI Master's research project"
+requires-python = ">=3.13"
+
+dependencies = [
+    "tabpfn>=6.4.1",
+    "numpy>=2.3.5",
+    "scipy>=1.17.0",
+    "scikit-learn>=1.8.0",
+    "torch>=2.10.0",       
+    "torchvision>=0.25.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }

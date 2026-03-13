@@ -1,6 +1,5 @@
 import numpy as np
 
-
 def remove_timeouts(runningtimes, cutoff, features=None, sat_ls=None):
     """
     Remove all instances with more than one value >= cutoff

@@ -3,25 +3,36 @@ import torch
 def calculate_all_distribution_metrics_distnet_logspace(
     y_test_orig,
     preds, 
-    y_scaler, 
-    grid_points,
+    y_scaler,
+    *,
+    device, 
+    N_grid_points,
 ):
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    """
+    y_test_orig: shape (B, O) - original unscaled targets
+    preds: shape (B, 2) - DistNet's predicted parameters (sigma, mu) in max-scaled space
+    y_scaler: scaler value - the max-scaling factor used to convert from original Y space to DistNet's max-scaled space
+    device: torch device for computation
+    N_grid_points: total number of points in the piecewise non-uniform grid for CDF evaluation
+
+    returns: - metrics_summary: summary dict, instance_summary: dict of per-instance metrics
+    
+    """
     y_test_orig = torch.as_tensor(y_test_orig, dtype=torch.float32, device=device)
     preds = torch.as_tensor(preds, dtype=torch.float32, device=device)
-    y_scaler = torch.as_tensor(y_scaler, dtype=torch.float64, device=device)
+    y_scaler = torch.as_tensor(y_scaler, dtype=torch.float32, device=device)
     
     z_test_orig = torch.log1p(y_test_orig)
 
-    sigma = preds[:, 0].unsqueeze(1)          
+    sigma = preds[:, 0].unsqueeze(1)
     mu = torch.log(preds[:, 1]).unsqueeze(1)  
     dist = torch.distributions.LogNormal(loc=mu, scale=sigma)
 
     # =========================================================
     # 1. CORE BOUNDS (Empirical Data in Z-Space)
     # =========================================================
-    min_z_emp = z_test_orig.min(dim=1, keepdim=True)[0]
-    max_z_emp = z_test_orig.max(dim=1, keepdim=True)[0]
+    min_z_emp = z_test_orig.min(dim=1, keepdim=True)[0]  # shape (B, 1)
+    max_z_emp = z_test_orig.max(dim=1, keepdim=True)[0]  # shape (B, 1)
     z_range = (max_z_emp - min_z_emp).clamp(min=1e-5)
     
     core_start = min_z_emp - 0.05 * z_range
@@ -52,7 +63,7 @@ def calculate_all_distribution_metrics_distnet_logspace(
     # =========================================================
     # 3. 15K PIECEWISE NON-UNIFORM GRID
     # =========================================================
-    left_pts, core_pts, right_pts = int(grid_points * 1/6), int(grid_points * 2/3), int(grid_points * 1/6)
+    left_pts, core_pts, right_pts = int(N_grid_points * 1/6), int(N_grid_points * 2/3), int(N_grid_points * 1/6)
 
     steps_left = torch.linspace(0, 1, left_pts, device=device).view(1, -1)
     z_grid_left = global_start + steps_left * (core_start - global_start)
@@ -63,13 +74,13 @@ def calculate_all_distribution_metrics_distnet_logspace(
     steps_right = torch.linspace(0, 1, right_pts + 1, device=device).view(1, -1)[:, 1:]
     z_grid_right = core_end + steps_right * (global_end - core_end)
 
-    z_grid = torch.cat([z_grid_left, z_grid_core, z_grid_right], dim=1)
+    z_grid = torch.cat([z_grid_left, z_grid_core, z_grid_right], dim=1)  # shape (B, N_grid_points)
 
     # =========================================================
     # 4. CDF EVALUATION & INTEGRATION (Apples-to-Apples in Z-space (i.e., log-scaled space))
     # =========================================================
-    indicator = (z_test_orig.unsqueeze(1) <= z_grid.unsqueeze(2)).float()
-    F_emp = indicator.mean(dim=2)
+    indicator = (z_test_orig.unsqueeze(1) <= z_grid.unsqueeze(2)).float()  
+    F_emp = indicator.mean(dim=2)  # shape (B, N_grid_points) - empirical CDF evaluated at each grid point
     
     # Evaluate DistNet CDF
     y_orig = torch.exp(z_grid) - 1.0
@@ -94,7 +105,7 @@ def calculate_all_distribution_metrics_distnet_logspace(
     z_sorted = torch.sort(z_test_orig, dim=1)[0]
     
     # Calculate the physical distance between consecutive sorted observations
-    diffs = z_sorted[:, 1:] - z_sorted[:, :-1]  # shape: (batch_size, N-1)
+    diffs = z_sorted[:, 1:] - z_sorted[:, :-1]  # shape: (B, N-1)
     
     # Generate the exact probability weights for each rectangle
     N = z_test_orig.shape[1]
@@ -102,7 +113,7 @@ def calculate_all_distribution_metrics_distnet_logspace(
     weights = (i / N) * (1.0 - i / N)           # shape: (N-1,)
     
     # Compute exact integral of the spread via dot product
-    empirical_spread = torch.sum(weights * diffs, dim=1) # shape: (batch_size,)
+    empirical_spread = torch.sum(weights * diffs, dim=1) # shape: (B,)
     
     all_crps = cvm_distance + empirical_spread
 
@@ -110,12 +121,12 @@ def calculate_all_distribution_metrics_distnet_logspace(
     # 5. VECTORIZED NLLH (in log-space)
     # =========================================================
     y_test_scaled = y_test_orig * y_scaler
-    nlog_pdf = -dist.log_prob(y_test_scaled)
-    nlog_pdf.clamp_(max=200.0)  # 200 corresponds to -log(1e-87); prevents possible inf's due to precision errors.
+    nlog_pdf = -dist.log_prob(y_test_scaled)  # shape (B, O)
+    nlog_pdf.clamp_(max=200.0)  # 200 corresponds to -log(1e-87); prevents possible inf's due to precision errors; same threshold used for tabpfn
 
     assert nlog_pdf.shape == z_test_orig.shape, f"shapes mismatched at nllh calculation: {nlog_pdf.shape} vs {z_test_orig.shape}"
     nlog_pdf += -z_test_orig  # nll correction
-    bias = -torch.log(torch.max(z_test_orig, keepdim=False, dim=1)[0]) - torch.log(y_scaler)
+    bias = -torch.log(torch.max(z_test_orig, keepdim=False, dim=1)[0]) - torch.log(y_scaler)  # shape (B,)
 
     all_nllh = nlog_pdf.mean(dim=1) + bias
 

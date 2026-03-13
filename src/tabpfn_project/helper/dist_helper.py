@@ -1,7 +1,6 @@
 import numpy as np
 import scipy.stats
 
-
 def lhood_dist(x, param, dist_name, threshold=1e-10):
     if dist_name == "weibull_min":
         lh = scipy.stats.weibull_min.pdf(x, c=param[0], loc=param[1], scale=param[2])

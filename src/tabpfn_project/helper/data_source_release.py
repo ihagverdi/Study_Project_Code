@@ -1,9 +1,7 @@
-import os
-
-def get_data_dir(): return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "distnet_data")
+from tabpfn_project.paths import DISTNET_DATA_DIR
 
 def get_sc_dict():
-    data_dir = get_data_dir()
+    data_dir = DISTNET_DATA_DIR
     sc_dict = {
      "clasp_factoring":
       {"scen": "clasp-3.0.4-p8_rand_factoring",

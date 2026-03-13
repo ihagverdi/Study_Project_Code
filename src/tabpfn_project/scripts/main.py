@@ -1,16 +1,22 @@
-import contextlib
-import os
 import argparse
-import pickle
-import numpy as np
-from sklearn.model_selection import KFold, train_test_split
-import torch
-import time
-from helper.tabpfn_vs_distnet_helpers import data_source_release, load_data
-from helper.tabpfn_vs_distnet_helpers.preprocess import delete_constant_features, preprocess_features
+import contextlib
 import gc
+import os
+import pickle
+import time
 
-RANDOM_STATE=0  # From original distnet paper
+import numpy as np
+import torch
+from tabpfn_project.helper import data_source_release, load_data
+from tabpfn_project.helper.preprocess import (
+    delete_constant_features,
+    preprocess_features,
+)
+
+# import globals
+from tabpfn_project.helper.globals import RANDOM_STATE
+from sklearn.model_selection import KFold, train_test_split
+
 
 @contextlib.contextmanager
 def track_gpu_memory_and_time(device_input):
@@ -135,7 +141,6 @@ def train_test_model(
 
     # Get scenario configuration and data
     sc_dict = data_source_release.get_sc_dict()
-    data_dir = data_source_release.get_data_dir()
     
     if scenario not in sc_dict.keys():
         raise ValueError(f"Invalid scenario: {scenario}. Must be one of {list(sc_dict.keys())}")
@@ -143,7 +148,6 @@ def train_test_model(
     # Load data
     runtimes, features, _ = load_data.get_data(
         scenario=scenario, 
-        data_dir=data_dir,
         sc_dict=sc_dict,
         retrieve=sc_dict[scenario]['use']
     )
@@ -195,8 +199,8 @@ def train_test_model(
     
     results_dict = None  # the ultimate dict to store after model fit&predict
     if model_name == 'distnet':
-        from helper.tabpfn_vs_distnet_helpers.distnet_lognormal import DistNetModel
-        from helper.tabpfn_vs_distnet_helpers.scalers import max_scaling
+        from tabpfn_project.helper.distnet_lognormal import DistNetModel
+        from tabpfn_project.helper.scalers import max_scaling
 
         assert target_scale in ['max'], "DistNet only supports 'max' scaling currently."
 
@@ -325,9 +329,9 @@ def train_test_model(
         }
 
     elif model_name == 'tabpfn':
+        from tabpfn_project.helper.pfn_helpers import batch_predict_tabpfn
+        from tabpfn_project.helper.scalers import log_scaling, max_scaling, z_score_scaling
         from tabpfn import TabPFNRegressor
-        from helper.tabpfn_vs_distnet_helpers.scalers import log_scaling, max_scaling, z_score_scaling
-        from helper.pfn_helpers import batch_predict_tabpfn
         
         # Scale y (runtime) values
         args = None

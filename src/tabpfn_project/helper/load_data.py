@@ -1,9 +1,7 @@
 import os
-
 import numpy as np
-
-from . import preprocess
-
+from tabpfn_project.helper import preprocess
+from tabpfn_project.paths import DISTNET_DATA_DIR
 
 def read_results(data_dir, cutoff=300, runs_per_inst=100, suffix="train"):
     fl_name = "%s/validate-random-%s/validationRunResultLineMatrix-cli-1-" \
@@ -47,7 +45,7 @@ def load_features(fl_name):
     return feat_dict
 
 
-def get_data(scenario, data_dir, sc_dict, impute_features=True, retrieve=["SAT", "UNSAT"]):
+def get_data(scenario, sc_dict, impute_features=True, retrieve=["SAT", "UNSAT"]):
     """
     Docstring for get_data
     
@@ -59,7 +57,7 @@ def get_data(scenario, data_dir, sc_dict, impute_features=True, retrieve=["SAT",
 
     :return: (runtimes, features, sat_ls)
     """
-    data_dir = data_dir + "/" + sc_dict[scenario]["scen"] + "/"
+    data_dir = os.path.join(DISTNET_DATA_DIR, sc_dict[scenario]["scen"])
     runtimes, inst_ls, sat_ls = \
         read_results(data_dir=data_dir, cutoff=sc_dict[scenario]["cutoff"],
                                runs_per_inst=100, suffix="train")

@@ -1,8 +1,8 @@
+import time
+from copy import deepcopy
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import time
-from copy import deepcopy
 
 def set_seed(seed):
     torch.manual_seed(seed)
