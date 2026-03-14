@@ -168,8 +168,8 @@ def batch_predict_tabpfn(model, X_test, validation_batch_size):
 def calculate_distribution_metrics_logspace_tabpfn(
     y_test_orig, 
     tabpfn_preds, 
+    *,
     device,
-    *, 
     target_scale,
     N_grid_points,
 ):

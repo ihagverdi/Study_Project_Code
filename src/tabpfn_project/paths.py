@@ -9,7 +9,7 @@ DISTNET_DATA_DIR = DATA_DIR / "distnet_data"
 
 NOTEBOOKS_DIR = ROOT_DIR / "notebooks"
 
-CONTEXT_SIZES_DIR = ROOT_DIR / "experiments" / "data" / "experiment_context_sizes"
+EXPERIMENTS_DATA_DIR = ROOT_DIR / "experiments" / "data"
 
 RESULTS_DIR = ROOT_DIR / "results"
 

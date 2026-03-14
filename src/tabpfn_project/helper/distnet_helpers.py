@@ -3,9 +3,9 @@ import torch
 def calculate_all_distribution_metrics_distnet_logspace(
     y_test_orig,
     preds, 
-    y_scaler,
     *,
     device, 
+    y_scaler,
     N_grid_points,
 ):
     """
