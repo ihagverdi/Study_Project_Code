@@ -12,3 +12,4 @@ tasks.txt
 # Notebook checkpoints
 .ipynb_checkpoints/
 *cache/
+smac3_output/

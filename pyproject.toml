@@ -12,6 +12,12 @@ dependencies = [
     "torch>=2.10.0",
     "torchvision>=0.25.0",
     "matplotlib>=3.10.8",
+    "ngboost>=0.5.9",
+    "xgboost>=3.2.0",
+    "quantile-forest>=1.4.1",
+    "swig>=4.4.1",
+    "smac>=2.3.1",
+    "configspace>=1.2.2",
 ]
 
 [build-system]
