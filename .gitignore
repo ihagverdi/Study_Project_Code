@@ -13,3 +13,4 @@ tasks.txt
 .ipynb_checkpoints/
 *cache/
 smac3_output/
+*_ignore*
