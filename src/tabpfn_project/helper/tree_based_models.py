@@ -68,21 +68,24 @@ def train_evaluate_qrf(X_train_flat: np.ndarray,
 
         cs = ConfigurationSpace()
         cs.add([
-            Integer("n_estimators", (100, 1000)),
-            Integer("min_samples_leaf", (1, 200)),
-            Float("max_features", (0.1, 1.0)),
-            Float("max_samples", (0.1, 1.0)),
-            Integer("max_depth", (5, 50)),
-            Categorical("criterion", ["squared_error", "friedman_mse"])
+            Integer("n_estimators", (100, 1000), default=100),
+            Integer("min_samples_leaf", (1, 200), default=1),
+            Float("max_features", (0.1, 1.0), default=1.0),
+            Float("max_samples", (0.1, 1.0), default=1.0),
+            Integer("max_depth", (5, 51), default=51), # 51 acts as a proxy for None,
+            Categorical("criterion", ["squared_error", "friedman_mse"], default="squared_error")
         ])
 
         def qrf_objective(config: Configuration, seed: int) -> float:
+            # Resolve proxy values to Python None for Scikit-Learn
+            resolved_max_depth = config["max_depth"] if config["max_depth"] <= 50 else None
+            resolved_max_samples = config["max_samples"] if config["max_samples"] < 1.0 else None
             model = RandomForestQuantileRegressor(
                 n_estimators=config["n_estimators"],
                 min_samples_leaf=config["min_samples_leaf"],
                 max_features=config["max_features"],
-                max_samples=config["max_samples"],
-                max_depth=config["max_depth"],
+                max_samples=resolved_max_samples,
+                max_depth=resolved_max_depth,
                 criterion=config["criterion"],
                 bootstrap=True, # Required for max_samples to take effect
                 random_state=seed, 
@@ -106,6 +109,11 @@ def train_evaluate_qrf(X_train_flat: np.ndarray,
         
         incumbent = smac.optimize()
         best_params = dict(incumbent)
+        # Resolve proxy values to None for final model configuration and logging
+        if best_params.get("max_depth") == 51:
+            best_params["max_depth"] = None
+        if best_params.get("max_samples") == 1.0:
+            best_params["max_samples"] = None
         print(f"[INFO] HPO Completed. Best Config: {best_params}")
 
     # 3. Final Model Training
@@ -504,11 +512,11 @@ def train_evaluate_ngboost(X_train_flat: np.ndarray,
         # Define Search Space
         cs = ConfigurationSpace()
         cs.add([
-            Integer("n_estimators", (100, 1500)),
-            Integer("max_depth", (2, 5)),
-            Float("learning_rate", (0.001, 0.1), log=True),
-            Float("minibatch_frac", (0.5, 1.0)),
-            Float("col_sample", (0.5, 1.0)),
+            Integer("n_estimators", (100, 2000), default=500),
+            Integer("max_depth", (2, 6), default=3),
+            Float("learning_rate", (0.001, 0.1), log=True, default=0.01),
+            Float("minibatch_frac", (0.1, 1.0), default=1.0),
+            Float("col_sample", (0.1, 1.0), default=1.0),
         ])
 
         def ngboost_objective(config: Configuration, seed: int) -> float:
