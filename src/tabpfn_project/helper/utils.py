@@ -1,4 +1,7 @@
 from copy import deepcopy
+import pathlib
+import pickle
+import platform
 import numpy as np
 import torch
 
@@ -15,6 +18,20 @@ def dict_to_cpu(d):
             result[k] = v
     return result
 
+class WindowsPathUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if name == 'PosixPath' and 'pathlib' in module:
+            return pathlib.WindowsPath
+        return super().find_class(module, name)
+
+def load_pickle(path, access_mode='rb'):
+    with open(path, access_mode) as f:
+        # Use our custom Unpickler on Windows, otherwise standard pickle
+        if platform.system() == 'Windows':
+            results_dict = WindowsPathUnpickler(f).load()
+        else:
+            results_dict = pickle.load(f)
+    return results_dict
 
 def subsample_flattened_data(X_train_flat, y_train_flat, context_size, seed, subsample_method):
     """
