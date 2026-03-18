@@ -89,7 +89,7 @@ def train_evaluate_qrf(X_train_flat: np.ndarray,
             model.fit(X_tr_hpo, y_tr_hpo)
             
             # Predict dense quantiles for fast HPO loss calculation
-            hpo_quantiles = np.arange(0.001, 1.0, 0.001).tolist()
+            hpo_quantiles = np.arange(0.0001, 1.0, 0.0001).tolist()
             y_pred = model.predict(X_val_hpo, quantiles=hpo_quantiles)
             
             # Compute Average Pinball Loss (Quantile Loss)
@@ -128,7 +128,7 @@ def train_evaluate_qrf(X_train_flat: np.ndarray,
     # 4. Inference & Evaluation
     print("[INFO] Beginning Inference & Evaluation on Unseen Test Data...")
     # Predict dense quantiles to construct the CDF
-    quantiles = np.arange(0.001, 1.0, 0.001).tolist()
+    quantiles = np.arange(0.0001, 1.0, 0.0001).tolist()
     start_test = time.perf_counter()
     y_pred_quantiles = final_model.predict(X_test, quantiles=quantiles)
     test_time = time.perf_counter() - start_test
