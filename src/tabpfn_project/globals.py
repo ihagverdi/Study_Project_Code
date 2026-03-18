@@ -14,7 +14,7 @@ DISTNET_SCENARIOS = [
     "lpg-zeno",
 ]
 
-MODELS = ["tabpfn", "distnet"]
+MODELS = ["tabpfn", "distnet", "ngboost", "qrf"]
 
 TARGET_SCALES = ["log", "z-score", "max"]
 
