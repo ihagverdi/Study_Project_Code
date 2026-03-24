@@ -23,6 +23,8 @@ DISTNET_DROP_RATES = [0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
 DISTNET_CONTEXT_SEEDS = [j*100 for j in range(1,6)]
 DISTNET_DROP_SEEDS = [k*1000 for k in range(1,6)]
 
+EPS = 1e-87  # Used for numerical stability in log-space calculations (e.g., NLLH). Matches TabPFN/DistNet's effective precision floor.
+
 
 '''------------------------------------------------------'''
 
