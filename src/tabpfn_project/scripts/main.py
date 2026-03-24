@@ -8,6 +8,7 @@ import time
 import numpy as np
 import torch
 from tabpfn_project.helper.load_data import load_distnet_data
+from tabpfn_project.helper.naive_baseline import calculate_all_distribution_metrics_baseline, get_marginal_empirical_predictor
 from tabpfn_project.helper.scalers import max_scaling, log_scaling, z_score_scaling
 
 from tabpfn_project.helper.preprocess import (
@@ -16,7 +17,7 @@ from tabpfn_project.helper.preprocess import (
 )
 
 # import globals
-from tabpfn_project.globals import RANDOM_STATE
+from tabpfn_project.globals import N_GRID_POINTS, RANDOM_STATE
 from sklearn.model_selection import KFold, train_test_split
 from tabpfn_project.helper.tree_based_models import train_evaluate_ngboost, train_evaluate_qrf
 from tabpfn_project.helper.utils import subsample_features, subsample_targets_per_instance, subsample_flattened_data
@@ -415,6 +416,37 @@ def train_test_model(
             }
         }
 
+    elif model_name == 'baseline':
+        y_train_flat_scaled = log_scaling(y_train_flat)[0]
+
+        start_time_baseline = time.perf_counter()
+        cdf_object, pdf_object = get_marginal_empirical_predictor(y_train_flat_scaled.ravel())
+        metrics_summary_baseline, instance_summary_baseline = calculate_all_distribution_metrics_baseline(y_test, cdf_object, pdf_object, N_grid_points=N_GRID_POINTS)
+        end_time_baseline_ = time.perf_counter()
+
+        results_dict = {
+            'model_name': 'baseline',
+            'scenario': scenario,
+            'fold': fold,
+            'seed_context': seed_context,
+            'seed_features': seed_features,
+            'seed_samples_per_instance': seed_samples_per_instance,
+            'feature_drop_rate': feature_drop_rate,
+            'context_size': context_size,
+            'target_scale': target_scale,
+            'subsample_method': subsample_method,
+            'num_samples_per_instance': num_samples_per_instance,
+            'use_cpu': use_cpu,
+            'save_dir': save_dir,
+            'test_preds': [metrics_summary_baseline, instance_summary_baseline],
+            'random_state': RANDOM_STATE,
+            'n_features': X_train_flat.shape[1],
+            'N_grid_points': N_GRID_POINTS,
+            'result_metrics': {
+                'total_time': end_time_baseline_ - start_time_baseline,
+            }
+        }
+        
     else:
         raise ValueError(f"Unsupported model_name: {model_name}")
     assert results_dict is not None, "results_dict is NONE"
@@ -433,7 +465,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train Model for Given Scenario (DistNet or TabPFN)')
 
     parser.add_argument('--scenario', type=str, required=True, help='Scenario name (e.g., lpg-zeno, clasp_factoring)')
-    parser.add_argument('--model', type=str, required=True, help='model type to train (distnet, tabpfn, ngboost, qrf)')
+    parser.add_argument('--model', type=str, required=True, help='model type to train (distnet, tabpfn, ngboost, qrf, baseline)')
     parser.add_argument('--fold', type=int, required=True, help='Cross-validation fold index (0-9)')
     parser.add_argument('--num_samples_per_instance', type=int, default=100, help='Number of training samples per instance (1-100)')
     parser.add_argument('--val_batch_size', type=int, default=1000, help='Validation batch size for TabPFN (default: 1000)')

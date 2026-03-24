@@ -1,4 +1,5 @@
 import torch
+from tabpfn_project.globals import EPS
 from tabpfn_project.helper.utils import dict_to_cpu
 
 def ignore_init(y: torch.Tensor, borders: torch.Tensor) -> torch.Tensor:
@@ -295,7 +296,7 @@ def calculate_distribution_metrics_logspace_tabpfn(
         target_transform_fn = lambda y: torch.log1p(y)  # TODO: add support for other scalers, move fn to the input section.
         batch_y_scaled = target_transform_fn(batch_y_orig)
         nlog_pdf = -log_pdf_tabpfn(logits, batch_y_scaled, borders)
-        nlog_pdf.clamp_(max=200.0)  # 200 corresponds to -log(1e-87); prevents possible inf's due to precision errors.
+        nlog_pdf.clamp_(max=-torch.log(EPS))  # 200 corresponds to -log(1e-87); prevents possible inf's due to precision errors.
         
         if target_scale == "log":  # (nllh in log-space)
             max_y_scaled = torch.max(batch_y_scaled, dim=1)[0]

@@ -4,24 +4,22 @@ from scipy.stats import gaussian_kde
 import torch
 from tabpfn_project.globals import EPS
 
-def get_marginal_empirical_predictor(y_train):
+def get_marginal_empirical_predictor(y_train_flat):
     """
     Creates the Marginal Empirical Predictor baseline using scipy's KDE.
     
     Args:
-        y_train: The target runtime values (can be 2D (N_instances, 100) or already flattened).
+        y_train_flat: The target runtime values (flattened).
         
     Returns:
         cdf_object: Callable ECDF object.
         pdf_object: gaussian_kde object, which supports .pdf(x) and .logpdf(x).
     """
-    # 1. Flatten the array to 1D
-    y_train_flat = np.ravel(y_train)
-    
-    # 2. Create the CDF object
+
+    # 1. Create the CDF object
     cdf_object = ECDF(y_train_flat)
     
-    # 3. Create the PDF object using scipy (defaults to Scott's Rule)
+    # 2. Create the PDF object using scipy (defaults to Scott's Rule)
     pdf_object = gaussian_kde(y_train_flat, bw_method='scott')
     
     return cdf_object, pdf_object
@@ -150,12 +148,11 @@ def calculate_all_distribution_metrics_baseline(
         "KS_std": all_ks.std().item(),
     }
     
-    # Convert per-instance arrays back to Torch tensors for downstream logging compatibility
     instance_summary = {
-        "NLLH": torch.tensor(all_nllh, dtype=torch.float32), 
-        "CRPS": torch.tensor(all_crps, dtype=torch.float32), 
-        "Wasserstein": torch.tensor(all_w1, dtype=torch.float32), 
-        "KS": torch.tensor(all_ks, dtype=torch.float32)
+        "NLLH": all_nllh, 
+        "CRPS": all_crps, 
+        "Wasserstein": all_w1, 
+        "KS": all_ks
     }
 
     return metrics_summary, instance_summary
