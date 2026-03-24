@@ -417,7 +417,10 @@ def train_test_model(
         }
 
     elif model_name == 'baseline':
-        y_train_flat_scaled = log_scaling(y_train_flat)[0]
+        assert target_scale in ['log'], "Baseline currently only supports 'log' scaling for the target variable."
+
+        if target_scale == 'log':
+            y_train_flat_scaled = log_scaling(y_train_flat)[0]
 
         start_time_baseline = time.perf_counter()
         cdf_object, pdf_object = get_marginal_empirical_predictor(y_train_flat_scaled.ravel())
