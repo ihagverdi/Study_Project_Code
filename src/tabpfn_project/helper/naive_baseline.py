@@ -2,7 +2,7 @@ import numpy as np
 from statsmodels.distributions.empirical_distribution import ECDF
 from scipy.stats import gaussian_kde
 import torch
-from tabpfn_project.globals import EPS
+from tabpfn_project.globals import MAX_CLAMP_VAL_NLLH
 
 def get_marginal_empirical_predictor(y_train_flat):
     """
@@ -129,8 +129,7 @@ def calculate_all_distribution_metrics_baseline(
 
     assert nlog_pdf.shape[0] == jacobian_correction.shape[0] == B, "Batch size mismatch in NLLH calculation"
     
-    clamp_val = -np.log(EPS)
-    nlog_pdf = np.clip(nlog_pdf, a_min=None, a_max=clamp_val)
+    nlog_pdf = np.clip(nlog_pdf, a_min=None, a_max=MAX_CLAMP_VAL_NLLH)
     
     all_nllh = nlog_pdf.mean(axis=1) + jacobian_correction
 

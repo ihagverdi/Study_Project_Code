@@ -17,7 +17,7 @@ from tabpfn_project.helper.preprocess import (
 )
 
 # import globals
-from tabpfn_project.globals import EPS, N_GRID_POINTS, RANDOM_STATE
+from tabpfn_project.globals import N_GRID_POINTS, RANDOM_STATE
 from sklearn.model_selection import KFold, train_test_split
 from tabpfn_project.helper.utils import subsample_features, subsample_targets_per_instance, subsample_flattened_data
 from tabpfn_project.paths import RESULTS_DIR, DISTNET_DATA_DIR

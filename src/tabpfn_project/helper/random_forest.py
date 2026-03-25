@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from tabpfn_project.globals import EPS
+from tabpfn_project.globals import MAX_CLAMP_VAL_NLLH
 
 class TreeNode:
     """A node in the Custom Regression Tree."""
@@ -328,8 +328,7 @@ def calculate_all_distribution_metrics_rf_baseline(
     # =========================================================
     nlog_pdf = -dist.log_prob(z_test_orig)  # shape (B, O)
 
-    clamp_val = -torch.log(torch.tensor(EPS, dtype=torch.float64, device=device))
-    nlog_pdf.clamp_(max=clamp_val)
+    nlog_pdf.clamp_(max=MAX_CLAMP_VAL_NLLH)
     jacobian = -torch.log(torch.max(z_test_orig, dim=1)[0])
     all_nllh = nlog_pdf.mean(dim=1) + jacobian  # shape (B,)
 

@@ -15,7 +15,7 @@ from ConfigSpace import Configuration, ConfigurationSpace, Float, Integer, Categ
 from smac import HyperparameterOptimizationFacade as HPOFacade
 from smac import Scenario
 
-from tabpfn_project.globals import RANDOM_STATE
+from tabpfn_project.globals import MAX_CLAMP_VAL_NLLH, RANDOM_STATE
 import time
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -291,7 +291,7 @@ def calculate_all_distribution_metrics_qrf_logspace_pchip(
     _, pdf_Z = eval_pchip_cdf_pdf(z_test_orig)
     
     nlog_pdf = -torch.log(pdf_Z)
-    nlog_pdf.clamp_(max=200.0)  # 200 corresponds to -log(1e-87); prevents possible inf's due to precision errors.
+    nlog_pdf.clamp_(max=MAX_CLAMP_VAL_NLLH)  # 200 corresponds to -log(1e-87); prevents possible inf's due to precision errors.
     
     max_y_scaled = torch.max(z_test_orig, dim=1)[0]
     bias = -torch.log(max_y_scaled)
@@ -440,7 +440,7 @@ def calculate_all_distribution_metrics_qrf_logspace_kde(
     # Apply exact TabPFN NLLH correction and clamping logic
     # nlog_pdf = -torch.log(pdf_Z.clamp(min=1e-87))  # Negative log-likelihood
     nlog_pdf = -torch.log(pdf_Z)  # Negative log-likelihood
-    nlog_pdf.clamp_(max=200.0)      # 200 corresponds to -log(1e-87); prevents infs
+    nlog_pdf.clamp_(max=MAX_CLAMP_VAL_NLLH)      # 200 corresponds to -log(1e-87); prevents infs
     
     # Because z_test_orig matches TabPFN's `batch_y_scaled`
     max_y_scaled = torch.max(z_test_orig, dim=1)[0]
@@ -696,7 +696,7 @@ def calculate_all_distribution_metrics_ngboost_logspace(
     # =========================================================
     y_test_scaled = y_test_orig * y_scaler
     nlog_pdf = -dist.log_prob(y_test_scaled)  # shape (B, O)
-    nlog_pdf.clamp_(max=200.0)  # 200 corresponds to -log(1e-87); prevents possible inf's due to precision errors; same threshold used for tabpfn & distnet.
+    nlog_pdf.clamp_(max=MAX_CLAMP_VAL_NLLH)  # 200 corresponds to -log(1e-87); prevents possible inf's due to precision errors; same threshold used for tabpfn & distnet.
 
     assert nlog_pdf.shape == z_test_orig.shape, f"shapes mismatched at nllh calculation: {nlog_pdf.shape} vs {z_test_orig.shape}"
     nlog_pdf += -z_test_orig  # nll correction

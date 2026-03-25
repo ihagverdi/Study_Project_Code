@@ -1,6 +1,6 @@
 import torch
 
-from tabpfn_project.globals import EPS
+from tabpfn_project.globals import MAX_CLAMP_VAL_NLLH
 
 def calculate_all_distribution_metrics_distnet_logspace(
     y_test_orig,
@@ -124,8 +124,7 @@ def calculate_all_distribution_metrics_distnet_logspace(
     # =========================================================
     y_test_scaled = y_test_orig * y_scaler
     nlog_pdf = -dist.log_prob(y_test_scaled)  # shape (B, O)
-    clamp_val = -torch.log(torch.tensor(EPS, dtype=torch.float64, device=device))
-    nlog_pdf.clamp_(max=clamp_val)
+    nlog_pdf.clamp_(max=MAX_CLAMP_VAL_NLLH)
 
     assert nlog_pdf.shape == z_test_orig.shape, f"shapes mismatched at nllh calculation: {nlog_pdf.shape} vs {z_test_orig.shape}"
     nlog_pdf += -z_test_orig  # nll correction

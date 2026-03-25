@@ -1,5 +1,5 @@
 import torch
-from tabpfn_project.globals import EPS
+from tabpfn_project.globals import MAX_CLAMP_VAL_NLLH
 from tabpfn_project.helper.utils import dict_to_cpu
 
 def ignore_init(y: torch.Tensor, borders: torch.Tensor) -> torch.Tensor:
@@ -296,8 +296,7 @@ def calculate_distribution_metrics_logspace_tabpfn(
         target_transform_fn = lambda y: torch.log1p(y)  # TODO: add support for other scalers, move fn to the input section.
         batch_y_scaled = target_transform_fn(batch_y_orig)
         nlog_pdf = -log_pdf_tabpfn(logits, batch_y_scaled, borders)
-        clamp_val = -torch.log(torch.tensor(EPS, dtype=torch.float64, device=device))
-        nlog_pdf.clamp_(max=clamp_val)
+        nlog_pdf.clamp_(max=MAX_CLAMP_VAL_NLLH)
         
         if target_scale == "log":  # (nllh in log-space)
             max_y_scaled = torch.max(batch_y_scaled, dim=1)[0]
