@@ -5,10 +5,10 @@ import os
 import pickle
 import time
 
+from ConfigSpace import CategoricalHyperparameter
 import numpy as np
 import torch
 from tabpfn_project.helper.load_data import load_distnet_data
-from tabpfn_project.helper.naive_baseline import calculate_all_distribution_metrics_baseline, get_marginal_empirical_predictor
 from tabpfn_project.helper.scalers import max_scaling, log_scaling, z_score_scaling
 
 from tabpfn_project.helper.preprocess import (
@@ -17,9 +17,8 @@ from tabpfn_project.helper.preprocess import (
 )
 
 # import globals
-from tabpfn_project.globals import N_GRID_POINTS, RANDOM_STATE
+from tabpfn_project.globals import EPS, N_GRID_POINTS, RANDOM_STATE
 from sklearn.model_selection import KFold, train_test_split
-from tabpfn_project.helper.tree_based_models import train_evaluate_ngboost, train_evaluate_qrf
 from tabpfn_project.helper.utils import subsample_features, subsample_targets_per_instance, subsample_flattened_data
 from tabpfn_project.paths import RESULTS_DIR, DISTNET_DATA_DIR
 
@@ -354,6 +353,8 @@ def train_test_model(
 
     elif model_name == 'ngboost':
         assert target_scale == 'max', "NGBoost currently only supports 'max' scaling for the target variable."
+        from tabpfn_project.helper.tree_based_models import train_evaluate_ngboost
+
         X_train_flat, X_test = preprocess_features(X_train_flat, X_test)
         if target_scale == 'max':
             y_train_flat_scaled, y_scale = max_scaling(y_train_flat)
@@ -386,6 +387,8 @@ def train_test_model(
 
     elif model_name == 'qrf':
         assert target_scale == 'log', "Quantile Regression Forest currently only supports 'log' scaling for the target variable."
+        from tabpfn_project.helper.tree_based_models import train_evaluate_qrf
+
         X_train_flat, X_test = preprocess_features(X_train_flat, X_test)
         if target_scale == 'log':
             y_train_flat_scaled = log_scaling(y_train_flat)[0]
@@ -416,8 +419,9 @@ def train_test_model(
             }
         }
 
-    elif model_name == 'baseline':
+    elif model_name == 'naive_baseline':
         assert target_scale in ['log'], "Baseline currently only supports 'log' scaling for the target variable."
+        from tabpfn_project.helper.naive_baseline import calculate_all_distribution_metrics_baseline, get_marginal_empirical_predictor
 
         if target_scale == 'log':
             y_train_flat_scaled = log_scaling(y_train_flat)[0]
@@ -449,9 +453,141 @@ def train_test_model(
                 'total_time': end_time_baseline_ - start_time_baseline,
             }
         }
+    
+    elif model_name == 'random_forest':
+        from smac import HyperparameterOptimizationFacade, Scenario
+        from ConfigSpace import Configuration, ConfigurationSpace
+        from ConfigSpace.hyperparameters import UniformFloatHyperparameter, UniformIntegerHyperparameter
+        from tabpfn_project.helper.random_forest import HutterRandomForest
+        from tabpfn_project.helper.random_forest import calculate_all_distribution_metrics_rf_baseline
         
+        # log-scale the targets
+        assert target_scale == 'log', "Random Forest baseline currently only supports 'log' scaling for the target variable."
+        y_train_flat_scaled = log_scaling(y_train_flat)[0]
+
+        if do_hpo:
+            print(f"Starting SMAC3 HPO for rf_baseline with a walltime limit of {hpo_time} seconds...")
+            hpo_start_time = time.perf_counter()
+            
+            # 1. Define the Configuration Space for HPO
+            cs = ConfigurationSpace()
+            cs.add([
+                UniformIntegerHyperparameter("n_trees", lower=10, upper=200, default_value=10),
+                CategoricalHyperparameter("min_samples_split", choices=[5, 10], default_value=5),
+                UniformFloatHyperparameter("ratio_features", lower=0.1, upper=1.0, default_value=0.5),
+            ])
+
+            # 2. Define the target function to evaluate configurations using 3-Fold CV NLL
+            def evaluate_rf(config: Configuration, seed: int = RANDOM_STATE) -> float:
+                kf = KFold(n_splits=3, shuffle=True, random_state=seed)
+                nll_scores =[]
+                
+                for train_idx, val_idx in kf.split(X_train_flat):
+                    X_tr, X_val = X_train_flat[train_idx], X_train_flat[val_idx]
+                    y_tr, y_val = y_train_flat_scaled[train_idx], y_train_flat_scaled[val_idx]
+
+                    # Instantiate model with the suggested configuration
+                    model = HutterRandomForest(
+                        n_trees=int(config["n_trees"]),
+                        min_samples_split=int(config["min_samples_split"]),
+                        ratio_features=float(config["ratio_features"]),
+                    )
+                    
+                    # Fit and predict
+                    model.fit(X_tr, y_tr.ravel())
+                    means, variances = model.predict(X_val)
+
+                    # Calculate Negative Log-Likelihood (NLL)
+                    # For a normal distribution N(mu, sigma^2): 
+                    # NLL = 0.5 * log(2 * pi * sigma^2) + (y - mu)^2 / (2 * sigma^2)
+                    nll = 0.5 * np.log(2 * np.pi * variances) + ((y_val.ravel() - means) ** 2) / (2 * variances)
+                    nll_scores.append(np.mean(nll))
+                
+                return float(np.mean(nll_scores))
+
+            # 3. Set up the SMAC3 Scenario
+            smac_scenario = Scenario(
+                configspace=cs,
+                deterministic=True,
+                n_trials=100000, # Large bound, mostly constrained by walltime_limit
+                walltime_limit=hpo_time,
+                seed=RANDOM_STATE,
+                name=f"rf_hpo_{scenario}_f{fold}_{int(time.time())}"
+            )
+
+            # 4. Run optimization
+            smac = HyperparameterOptimizationFacade(scenario=smac_scenario, target_function=evaluate_rf)
+            incumbent = smac.optimize()
+            
+            hpo_end_time = time.perf_counter()
+            hpo_duration = hpo_end_time - hpo_start_time
+            print(f"SMAC3 HPO completed in {hpo_duration:.2f} seconds.")
+            print(f"Best configuration found: {incumbent}")
+            
+            # Use the best hyperparameters found
+            best_params_rf = dict(incumbent)
+            rf_model = HutterRandomForest(
+                n_trees=int(best_params_rf["n_trees"]),
+                min_samples_split=int(best_params_rf["min_samples_split"]),
+                ratio_features=float(best_params_rf["ratio_features"]),
+            )
+        else:
+            hpo_duration = 0.0
+            best_params_rf = {
+                "n_trees": 10,
+                "min_samples_split": 5,
+                "ratio_features": 0.5,
+            }
+
+            rf_model = HutterRandomForest(n_trees=10, min_samples_split=5, ratio_features=0.5)
+
+        start_time_rf = time.perf_counter()
+        rf_model.fit(X_train_flat, y_train_flat_scaled.ravel())
+        end_time_rf_fit = time.perf_counter()
+
+        rf_means, rf_variances = rf_model.predict(X_test)
+        end_time_rf_predict = time.perf_counter()
+
+        device = torch.device("cuda" if (torch.cuda.is_available() and not use_cpu) else "cpu")
+
+        metrics_summary, instance_summary = calculate_all_distribution_metrics_rf_baseline(
+            y_test_orig=y_test,
+            preds=(rf_means, rf_variances),
+            device=device,
+            N_grid_points=N_GRID_POINTS
+        )
+
+        results_dict = {
+            'model_name': 'rf_baseline',
+            'best_params': best_params_rf,
+            'scenario': scenario,
+            'fold': fold,
+            'seed_context': seed_context,
+            'seed_features': seed_features,
+            'seed_samples_per_instance': seed_samples_per_instance,
+            'feature_drop_rate': feature_drop_rate,
+            'context_size': context_size,
+            'target_scale': target_scale,
+            'subsample_method': subsample_method,
+            'num_samples_per_instance': num_samples_per_instance,
+            'use_cpu': use_cpu,
+            'save_dir': save_dir,
+            'test_preds': [rf_means, rf_variances],
+            'random_state': RANDOM_STATE,
+            'n_features': X_train_flat.shape[1],
+            'N_grid_points': N_GRID_POINTS,
+            'result_metrics': {
+                'fit_time': end_time_rf_fit - start_time_rf,
+                'predict_time': end_time_rf_predict - end_time_rf_fit,
+                'hpo_time': hpo_duration,
+                'metrics_summary': metrics_summary,
+                'instance_summary': instance_summary,
+            }
+        }
+
     else:
         raise ValueError(f"Unsupported model_name: {model_name}")
+    
     assert results_dict is not None, "results_dict is NONE"
     results_file_name = (f"{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_{seed_samples_per_instance}_{feature_drop_rate}_"
                          f"{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}_{early_stopping}_{'cpu' if use_cpu else 'gpu'}.pkl")
@@ -468,7 +604,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train Model for Given Scenario (DistNet or TabPFN)')
 
     parser.add_argument('--scenario', type=str, required=True, help='Scenario name (e.g., lpg-zeno, clasp_factoring)')
-    parser.add_argument('--model', type=str, required=True, help='model type to train (distnet, tabpfn, ngboost, qrf, baseline)')
+    parser.add_argument('--model', type=str, required=True, help='model type to train (distnet, tabpfn, ngboost, qrf, naive_baseline, random_forest)')
     parser.add_argument('--fold', type=int, required=True, help='Cross-validation fold index (0-9)')
     parser.add_argument('--num_samples_per_instance', type=int, default=100, help='Number of training samples per instance (1-100)')
     parser.add_argument('--val_batch_size', type=int, default=1000, help='Validation batch size for TabPFN (default: 1000)')

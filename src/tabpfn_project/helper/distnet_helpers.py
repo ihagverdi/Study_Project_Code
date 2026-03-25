@@ -124,7 +124,8 @@ def calculate_all_distribution_metrics_distnet_logspace(
     # =========================================================
     y_test_scaled = y_test_orig * y_scaler
     nlog_pdf = -dist.log_prob(y_test_scaled)  # shape (B, O)
-    nlog_pdf.clamp_(max=-torch.log(EPS))  # 200 corresponds to -log(1e-87); prevents possible inf's due to precision errors; same threshold used for tabpfn
+    clamp_val = -torch.log(torch.tensor(EPS, dtype=torch.float64, device=device))
+    nlog_pdf.clamp_(max=clamp_val)
 
     assert nlog_pdf.shape == z_test_orig.shape, f"shapes mismatched at nllh calculation: {nlog_pdf.shape} vs {z_test_orig.shape}"
     nlog_pdf += -z_test_orig  # nll correction

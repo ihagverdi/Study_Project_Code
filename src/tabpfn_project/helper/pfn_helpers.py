@@ -296,7 +296,8 @@ def calculate_distribution_metrics_logspace_tabpfn(
         target_transform_fn = lambda y: torch.log1p(y)  # TODO: add support for other scalers, move fn to the input section.
         batch_y_scaled = target_transform_fn(batch_y_orig)
         nlog_pdf = -log_pdf_tabpfn(logits, batch_y_scaled, borders)
-        nlog_pdf.clamp_(max=-torch.log(EPS))  # 200 corresponds to -log(1e-87); prevents possible inf's due to precision errors.
+        clamp_val = -torch.log(torch.tensor(EPS, dtype=torch.float64, device=device))
+        nlog_pdf.clamp_(max=clamp_val)
         
         if target_scale == "log":  # (nllh in log-space)
             max_y_scaled = torch.max(batch_y_scaled, dim=1)[0]
