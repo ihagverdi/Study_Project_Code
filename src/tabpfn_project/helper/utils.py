@@ -12,6 +12,14 @@ def dict_to_cpu(d):
             result[k] = v.detach().cpu()
         elif isinstance(v, dict):
             result[k] = dict_to_cpu(v)
+        elif isinstance(v, (list, tuple)):
+            processed_iterable = [
+                vi.detach().cpu() if isinstance(vi, torch.Tensor) 
+                else dict_to_cpu(vi) if isinstance(vi, dict) 
+                else vi 
+                for vi in v
+            ]
+            result[k] = type(v)(processed_iterable) # keep it a list or tuple
         elif hasattr(v, 'cpu') and callable(v.cpu):
             result[k] = deepcopy(v).cpu()
         else:
@@ -102,3 +110,107 @@ def subsample_targets_per_instance(y_train, num_samples_per_instance, seed_sampl
     subsample_idx = rng.choice(y_train.shape[1], size=num_samples_per_instance, replace=False)
     y_train = y_train[:, subsample_idx]
     return y_train
+
+    
+def load_tabpfn_preds(
+    tabpfn_preds_dir,
+    scenario_name,
+    fold_idx,
+    context_size,
+    context_seed,
+    seed_features,
+    seed_samples_per_instance,
+    feature_drop_rate,
+    target_scale,
+    subsample_method,
+    num_samples_per_instance,
+    use_cpu,
+ ):
+    device_tag = "cpu" if use_cpu else "gpu"
+    fname = (
+        f"tabpfn_{scenario_name}_{fold_idx}_{context_seed}_{seed_features}_{seed_samples_per_instance}_{feature_drop_rate}_"
+        f"{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}_{device_tag}_test_preds.pkl"
+    )
+    fpath = tabpfn_preds_dir / fname
+
+    with open(fpath, "rb") as f:
+        if platform.system() == "Windows":
+            return WindowsPathUnpickler(f).load()
+        return pickle.load(f)
+
+def fetch_save_dict(results_dir: pathlib.Path, metadata_dir: pathlib.Path, model_name: str, scenario: str = None) -> None:
+    """Build and save a nested results dictionary filtered by model and scenario."""
+    experiment_results_lst = []
+
+    for fpath in sorted(metadata_dir.glob("*.pkl")):
+        with open(fpath, "rb") as f:
+            if platform.system() == "Windows":
+                results_dict = WindowsPathUnpickler(f).load()
+            else:
+                results_dict = pickle.load(f)
+
+        if scenario is not None and results_dict.get("scenario") != scenario:
+            continue
+        if results_dict.get("model_name") != model_name:
+            continue
+
+        context_size = results_dict["context_size"]
+        if context_size in {2**13 + 2000, 2**13 + 4000}:
+            continue
+
+        metrics_summary = None
+        instance_summary = None
+        best_params = None
+        y_preds = None
+        fit_time = None
+        predict_time = None
+        fit_gpu = None
+        predict_gpu = None
+        hpo_time = None
+
+
+        if model_name == "baseline":
+            metrics_summary = results_dict['test_preds'][0]
+            instance_summary = results_dict['test_preds'][1]
+
+        elif model_name == "rf_baseline":
+            metrics_summary = results_dict['result_metrics']['metrics_summary']
+            instance_summary = results_dict['result_metrics']['instance_summary']
+            best_params = results_dict['best_params']
+            y_preds = results_dict['test_preds']  # [rf_means, rf_variances]
+            fit_time = results_dict['result_metrics']['fit_time']
+            predict_time = results_dict['result_metrics']['predict_time']
+            hpo_time = results_dict['result_metrics']['hpo_time']
+
+        elif model_name == "tabpfn":
+            fit_gpu = results_dict['result_metrics']['fit']
+            predict_gpu = results_dict['result_metrics']['predict']
+
+        temp = {
+            "scenario": results_dict["scenario"],
+            "model": results_dict["model_name"],
+            "context_size": results_dict["context_size"],
+            "fold": results_dict["fold"],
+            "context_seed": results_dict["seed_context"],
+            "metrics_summary": metrics_summary,
+            "instance_summary": instance_summary,
+            "best_params": best_params,
+            "y_preds": y_preds,
+            "target_scale": results_dict["target_scale"],
+            "fit_time": fit_time,
+            "predict_time": predict_time,
+            "hpo_time": hpo_time,
+            "fit_gpu": fit_gpu,
+            "predict_gpu": predict_gpu,
+            "use_cpu": results_dict["use_cpu"],
+        }
+
+        experiment_results_lst.append(temp)
+
+    if scenario is None:
+        scenario = "all_scenarios"
+    save_file_path = results_dir / f"{model_name}_{scenario}.pkl"
+    with open(save_file_path, "wb") as f:
+        pickle.dump(experiment_results_lst, f)
+
+    print(f"Saved to {save_file_path}")

@@ -454,7 +454,7 @@ def train_test_model(
             }
         }
     
-    elif model_name == 'random_forest':
+    elif model_name == 'rf_baseline':
         from smac import HyperparameterOptimizationFacade, Scenario
         from ConfigSpace import Configuration, ConfigurationSpace
         from ConfigSpace.hyperparameters import UniformFloatHyperparameter, UniformIntegerHyperparameter
@@ -604,7 +604,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train Model for Given Scenario (DistNet or TabPFN)')
 
     parser.add_argument('--scenario', type=str, required=True, help='Scenario name (e.g., lpg-zeno, clasp_factoring)')
-    parser.add_argument('--model', type=str, required=True, help='model type to train (distnet, tabpfn, ngboost, qrf, naive_baseline, random_forest)')
+    parser.add_argument('--model', type=str, required=True, help='model type to train (distnet, tabpfn, ngboost, qrf, naive_baseline, rf_baseline)')
     parser.add_argument('--fold', type=int, required=True, help='Cross-validation fold index (0-9)')
     parser.add_argument('--num_samples_per_instance', type=int, default=100, help='Number of training samples per instance (1-100)')
     parser.add_argument('--val_batch_size', type=int, default=1000, help='Validation batch size for TabPFN (default: 1000)')
