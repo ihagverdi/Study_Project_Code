@@ -23,7 +23,7 @@ DISTNET_DROP_RATES = [0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
 DISTNET_CONTEXT_SEEDS = [j*100 for j in range(1,6)]
 DISTNET_DROP_SEEDS = [k*1000 for k in range(1,6)]
 
-MAX_CLAMP_VAL_NLLH = 200.0  # corresponds to a minimum likelihood of exp(-200) ~ 1e-87, which is very small and should not cause numerical issues.
+MIN_CLAMP_LLH = -200.0  # ~= np.log(1e-87), to prevent numerical issues in log-space. 
 
 
 '''------------------------------------------------------'''

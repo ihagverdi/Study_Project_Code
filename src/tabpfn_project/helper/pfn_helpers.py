@@ -1,5 +1,5 @@
 import torch
-from tabpfn_project.globals import MAX_CLAMP_VAL_NLLH
+from tabpfn_project.globals import MIN_CLAMP_LLH
 from tabpfn_project.helper.utils import dict_to_cpu
 
 def ignore_init(y: torch.Tensor, borders: torch.Tensor) -> torch.Tensor:
@@ -167,30 +167,41 @@ def batch_predict_tabpfn(model, X_test, validation_batch_size):
     return tabpfn_preds
 
 def calculate_distribution_metrics_logspace_tabpfn(
-    y_test_orig, 
-    tabpfn_preds, 
+    y_test_orig,
+    tabpfn_preds,
     *,
     device,
     target_scale,
     N_grid_points,
 ):
     """
-    y_test_orig: shape (B, O) in original Y space (not scaled)
-    tabpfn_preds: list of dicts
-    device: torch device for computation
-    N_grid_points: number of points in the piecewise non-uniform grid for integration
-    target_scale: the scale in which the NLLH is computed. Only "log" is supported for now, which corresponds to the scale in which TabPFN models the distribution (i.e., log1p space).
+    Compute distribution metrics for TabPFN predictive distributions in log1p space.
 
-    returns: metrics_summary (dict), instance_summary (dict of tensors)
+    Args:
+        y_test_orig (array-like | torch.Tensor):
+            Ground-truth targets in original Y space, shape (B, O).
+        tabpfn_preds (list[dict]):
+            Batched outputs from TabPFN predict(..., output_type="full").
+        device (torch.device):
+            Device used for tensor computation.
+        target_scale (str):
+            Native scale of TabPFN predictions. Must be "log" or "original".
+        N_grid_points (int):
+            Number of points in the piecewise non-uniform integration grid.
+
+    Returns:
+        tuple[dict[str, float], dict[str, torch.Tensor]]:
+            metrics_summary: Aggregate mean/std metrics.
+            instance_summary: Per-instance tensors for NLLH, CRPS, Wasserstein, and KS.
     """
 
-    assert target_scale == "log", "TabPFN supports only 'log' scaler atm"
+    assert target_scale in ["log", "original"], "target_scale must be 'log' or 'original'"
 
     y_test_orig = torch.as_tensor(y_test_orig, dtype=torch.float32, device=device)
-    
-    # Ground truth in the integration space
+
+    # Ground truth in the integration space (Z-space)
     z_test_orig = torch.log1p(y_test_orig)
-    
+
     all_crps, all_w1, all_ks, all_nllh = [], [], [], []
     instance_idx = 0
     for batch in tabpfn_preds:
@@ -202,7 +213,7 @@ def calculate_distribution_metrics_logspace_tabpfn(
         batch_z_orig = z_test_orig[instance_idx : instance_idx + batch_size]
         
         # =========================================================
-        # 1. CORE BOUNDS (Empirical Data in Z-Space (i.e., log-space))
+        # 1. CORE BOUNDS (Empirical Data in Z-Space / log1p-space)
         # =========================================================
         min_z_emp = batch_z_orig.min(dim=1, keepdim=True)[0]
         max_z_emp = batch_z_orig.max(dim=1, keepdim=True)[0]
@@ -226,17 +237,29 @@ def calculate_distribution_metrics_logspace_tabpfn(
         tail_left_ext = hn_left.icdf(p_val)
         tail_right_ext = hn_right.icdf(p_val)
         
-        # Mathematical boundaries of TabPFN in Z-space
-        z_model_min = borders[1] - tail_left_ext
-        z_model_max = borders[-2] + tail_right_ext
+        # Mathematical boundaries of TabPFN
+        if target_scale == "log":
+            # Model is natively in Z-space
+            z_model_min = borders[1] - tail_left_ext 
+            z_model_max = borders[-2] + tail_right_ext
+        elif target_scale == "original":
+            # Model is natively in Y-space (original)
+            y_model_min = borders[1] - tail_left_ext
+            y_model_max = borders[-2] + tail_right_ext
+            
+            # Map Y bounds to Z bounds.
+            # We clamp at 0.0 because any negative probability mass is left-censored 
+            # at y=0, meaning it mathematically collapses to z=0.
+            z_model_min = torch.log1p(torch.clamp(y_model_min, min=0.0))
+            z_model_max = torch.log1p(torch.clamp(y_model_max, min=0.0))
 
-        # Global integration bounds
+        # Global integration bounds in Z-space
         # Shapes: (B,1)
         global_start = torch.minimum(core_start - 0.5 * z_range, z_model_min.unsqueeze(0).expand(batch_size, -1))
         global_end = torch.maximum(core_end + 0.5 * z_range, z_model_max.unsqueeze(0).expand(batch_size, -1))
 
         # =========================================================
-        # 3. PIECEWISE NON-UNIFORM GRID
+        # 3. PIECEWISE NON-UNIFORM GRID (Strictly in Z-Space)
         # =========================================================
         left_pts, core_pts, right_pts = int(N_grid_points * 1/6), int(N_grid_points * 2/3), int(N_grid_points * 1/6)
 
@@ -252,13 +275,21 @@ def calculate_distribution_metrics_logspace_tabpfn(
         z_grid = torch.cat([z_grid_left, z_grid_core, z_grid_right], dim=1) # shape: (B, N_grid_points)
 
         # =========================================================
-        # 4. CDF EVALUATION & INTEGRATION (Natively in Log-Space)
+        # 4. CDF EVALUATION & INTEGRATION (Natively in Z-Space)
         # =========================================================
         indicator = (batch_z_orig.unsqueeze(1) <= z_grid.unsqueeze(2)).float()
         F_emp = indicator.mean(dim=2)  # shape: (B, N_grid_points)
         
-        # TabPFN is already modeled in Z-space, no un-scaling required!
-        F_tab = cdf_tabpfn(logits, z_grid, borders)
+        if target_scale == "log":
+            F_tab = cdf_tabpfn(logits, z_grid, borders)
+        elif target_scale == "original":
+            # Map Z-grid back to original Y-space to query the linear model
+            y_grid = torch.expm1(z_grid)
+            F_tab_raw = cdf_tabpfn(logits, y_grid, borders)
+            
+            # LEFT-CENSORING: Any probability mass assigned to z < 0 (i.e. y < 0) 
+            # is physically impossible, so it is strictly censored to 0 probability.
+            F_tab = torch.where(z_grid < 0, torch.zeros_like(F_tab_raw), F_tab_raw)
         
         cdf_diff = F_tab - F_emp
         abs_cdf_diff = torch.abs(cdf_diff)
@@ -293,16 +324,28 @@ def calculate_distribution_metrics_logspace_tabpfn(
         # =========================================================
         # 5. VECTORIZED NLLH (Evaluated in log-space)
         # =========================================================
-        target_transform_fn = lambda y: torch.log1p(y)  # TODO: add support for other scalers, move fn to the input section.
-        batch_y_scaled = target_transform_fn(batch_y_orig)
-        nlog_pdf = -log_pdf_tabpfn(logits, batch_y_scaled, borders)
-        nlog_pdf.clamp_(max=MAX_CLAMP_VAL_NLLH)
-        
-        if target_scale == "log":  # (nllh in log-space)
-            max_y_scaled = torch.max(batch_y_scaled, dim=1)[0]
-            bias = -torch.log(max_y_scaled)
+        if target_scale == "log":
+            llh = log_pdf_tabpfn(logits, batch_z_orig, borders)
+            llh.clamp_(min=MIN_CLAMP_LLH)
+            
+            bias = -torch.log(torch.max(batch_z_orig, dim=1)[0])
+            
+        elif target_scale == "original":
+            llh = log_pdf_tabpfn(logits, batch_y_orig, borders)
+            llh.clamp_(min=MIN_CLAMP_LLH)
 
-        batch_nllh = nlog_pdf.mean(dim=1) + bias
+            jacobian = batch_z_orig
+            assert llh.shape == jacobian.shape, f"Shape mismatch between llh {llh.shape} and jacobian {jacobian.shape}"
+            llh += jacobian
+
+            bias = -torch.log(torch.max(batch_z_orig, dim=1)[0])
+
+        assert llh.shape[0] == bias.shape[0], f"Batch size mismatch between llh {llh.shape} and bias {bias.shape}"
+        assert llh.ndim == 2, f"Expected llh to have shape (B, O), but got {llh.shape}"
+        assert bias.ndim == 1, f"Expected bias to have shape (B,), but got {bias.shape}"
+        
+        batch_nllh = -llh.mean(dim=1) + bias
+
         all_nllh.append(batch_nllh.detach().cpu())
         
         instance_idx += batch_size
@@ -311,7 +354,7 @@ def calculate_distribution_metrics_logspace_tabpfn(
     all_w1 = torch.cat(all_w1)
     all_ks = torch.cat(all_ks)
     all_nllh = torch.cat(all_nllh)
-    
+
     metrics_summary = {
         "NLLH_mean": all_nllh.mean().item(),
         "NLLH_std": all_nllh.std().item(),
@@ -324,6 +367,5 @@ def calculate_distribution_metrics_logspace_tabpfn(
     }
 
     instance_summary = {"NLLH": all_nllh, "CRPS": all_crps, "Wasserstein": all_w1, "KS": all_ks}
-    
-    return metrics_summary, instance_summary
 
+    return metrics_summary, instance_summary

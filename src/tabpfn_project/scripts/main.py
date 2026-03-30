@@ -9,7 +9,6 @@ from ConfigSpace import CategoricalHyperparameter
 import numpy as np
 import torch
 from tabpfn_project.helper.load_data import load_distnet_data
-from tabpfn_project.helper.scalers import max_scaling, log_scaling, z_score_scaling
 
 from tabpfn_project.helper.preprocess import (
     delete_constant_features,
@@ -19,7 +18,7 @@ from tabpfn_project.helper.preprocess import (
 # import globals
 from tabpfn_project.globals import N_GRID_POINTS, RANDOM_STATE
 from sklearn.model_selection import KFold, train_test_split
-from tabpfn_project.helper.utils import subsample_features, subsample_targets_per_instance, subsample_flattened_data
+from tabpfn_project.helper.scalers import max_scaling, log_scaling
 from tabpfn_project.paths import RESULTS_DIR, DISTNET_DATA_DIR
 
 @contextlib.contextmanager
@@ -111,6 +110,7 @@ def train_test_model(
         print(f"Subsampling the training data to {num_samples_per_instance} samples per instance (without replacement).")
         assert 1 <= num_samples_per_instance <= 100, "num_samples_per_instance must be between 1 and 100"
         assert seed_samples_per_instance is not None, "seed_samples_per_instance must be provided"
+        from tabpfn_project.helper.utils import subsample_targets_per_instance
         y_train = subsample_targets_per_instance(y_train, num_samples_per_instance, seed_samples_per_instance)
     
 
@@ -124,6 +124,8 @@ def train_test_model(
         assert seed_context is not None, "seed_context must be provided when context_size is specified."
         assert 1 <= context_size <= X_train_flat.shape[0], "invalid context_size value."
         if context_size < X_train_flat.shape[0]:
+            from tabpfn_project.helper.utils import subsample_flattened_data
+
             print(f"Subsampling the training data to context size {context_size} using method '{subsample_method}'")
             X_train_flat, y_train_flat = subsample_flattened_data(X_train_flat, y_train_flat, context_size=context_size, seed=seed_context, subsample_method=subsample_method)
     
@@ -133,6 +135,7 @@ def train_test_model(
     if feature_drop_rate is not None:
         assert seed_features is not None, "seed_features must be provided when feature_drop_rate > 0.0"
         assert 0.0 < feature_drop_rate <= 1.0, "feature_drop_rate must be in (0.0, 1.0]"
+        from tabpfn_project.helper.utils import subsample_features
         print(f"Sampling features with drop rate {feature_drop_rate}")
         X_train_flat, X_test = subsample_features(X_train_flat, X_test, drop_rate=feature_drop_rate, seed=seed_features)
     
@@ -269,20 +272,17 @@ def train_test_model(
     elif model_name == 'tabpfn':
         from tabpfn_project.helper.pfn_helpers import batch_predict_tabpfn
         from tabpfn import TabPFNRegressor
+        from tabpfn_project.helper.pfn_helpers import calculate_distribution_metrics_logspace_tabpfn
         
         # Scale y (runtime) values
-        args = None
-        if target_scale == 'max':
-            y_train_flat, y_test, _ = max_scaling(y_train_flat, y_test)
-        elif target_scale == 'log':
-            y_train_flat, y_test = log_scaling(y_train_flat, y_test)
-        elif target_scale == "z-score":
-            y_train_flat, y_test, mean, std = z_score_scaling(y_train_flat, y_test)
-            args = [mean, std]
-        elif target_scale == "none":
+        assert target_scale in ['log', 'original'], "TabPFN currently only supports 'log' or 'original' scaling for the target variable."
+        if target_scale == 'log':
+            y_train_flat = log_scaling(y_train_flat)[0]
+        elif target_scale == "original":
             pass  # no scaling
         
         # no preprocessing of features for TabPFN
+
         # initialize and train model
         device = torch.device('cuda' if (torch.cuda.is_available() and not use_cpu) else 'cpu')
         print(f"TabPFN using device: {device}")
@@ -330,6 +330,8 @@ def train_test_model(
         with open(tabpfn_preds_full_path, 'wb') as f:
             pickle.dump(tabpfn_preds_full, f)
 
+        metrics_summary_pfn, instance_summary_pfn = calculate_distribution_metrics_logspace_tabpfn(y_test, tabpfn_preds_full, device=device, target_scale=target_scale, N_grid_points=N_GRID_POINTS)
+
         results_dict = {
             'model_name': 'tabpfn',
             'scenario': scenario,
@@ -348,8 +350,15 @@ def train_test_model(
             'random_state': RANDOM_STATE,
             'n_features': X_train_flat.shape[1],
             'scaler_args': args,
-            'result_metrics': mem_time_stats,
+            'result_metrics': {
+                'mem_time_stats': mem_time_stats,
+                'metrics_summary': metrics_summary_pfn,
+                'instance_summary': instance_summary_pfn,
+            },
         }
+
+        print(f"TabPFN results for scenario={scenario}, fold={fold}:")
+        print(f"  Metrics Summary: {metrics_summary_pfn.items()}")
 
     elif model_name == 'ngboost':
         assert target_scale == 'max', "NGBoost currently only supports 'max' scaling for the target variable."
@@ -608,7 +617,7 @@ if __name__ == "__main__":
     parser.add_argument('--fold', type=int, required=True, help='Cross-validation fold index (0-9)')
     parser.add_argument('--num_samples_per_instance', type=int, default=100, help='Number of training samples per instance (1-100)')
     parser.add_argument('--val_batch_size', type=int, default=1000, help='Validation batch size for TabPFN (default: 1000)')
-    parser.add_argument('--target_scale', type=str, required=True, help='Target scaling method (log, z-score, max, none)')
+    parser.add_argument('--target_scale', type=str, required=True, help='Target scaling method (log, max, original)')
     parser.add_argument('--subsample_method', type=str, default=None, help='Sampling method (flatten-random)')
     parser.add_argument('--context_size', type=int, default=None, help='Number of flattened training samples (default: None, use all)')
     parser.add_argument('--feature_drop_rate', type=float, default=None, help='Feature drop rate (default: None, use all features)')

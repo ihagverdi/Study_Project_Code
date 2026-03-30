@@ -1,6 +1,6 @@
 import torch
 
-from tabpfn_project.globals import MAX_CLAMP_VAL_NLLH
+from tabpfn_project.globals import MAX_CLAMP_VAL_NLLH, MIN_CLAMP_LLH
 
 def calculate_all_distribution_metrics_distnet_logspace(
     y_test_orig,
@@ -123,14 +123,19 @@ def calculate_all_distribution_metrics_distnet_logspace(
     # 5. VECTORIZED NLLH (in log-space)
     # =========================================================
     y_test_scaled = y_test_orig * y_scaler
-    nlog_pdf = -dist.log_prob(y_test_scaled)  # shape (B, O)
-    nlog_pdf.clamp_(max=MAX_CLAMP_VAL_NLLH)
+    llh = dist.log_prob(y_test_scaled)  # shape (B, O)
+    llh.clamp_(min=MIN_CLAMP_LLH)
+ 
 
-    assert nlog_pdf.shape == z_test_orig.shape, f"shapes mismatched at nllh calculation: {nlog_pdf.shape} vs {z_test_orig.shape}"
-    nlog_pdf += -z_test_orig  # nll correction
-    bias = -torch.log(torch.max(z_test_orig, keepdim=False, dim=1)[0]) - torch.log(y_scaler)  # shape (B,)
+    assert llh.shape == z_test_orig.shape, f"shapes mismatched at nllh calculation: {llh.shape} vs {z_test_orig.shape}"
+    llh += z_test_orig  # jacobian correction
 
-    all_nllh = nlog_pdf.mean(dim=1) + bias
+    bias = -torch.log(torch.max(z_test_orig, dim=1)[0]) - torch.log(y_scaler)  # shape (B,)
+
+    assert bias.shape == (y_test_orig.shape[0],), f"shapes mismatched at bias calculation: {bias.shape} vs {(y_test_orig.shape[0],)}"
+    assert bias.ndim == 1 and llh.ndim == 2, f"unexpected dimensions: bias {bias.ndim} vs llh {llh.ndim}"
+
+    all_nllh = -llh.mean(dim=1) + bias
 
     metrics_summary = {
         "NLLH_mean": all_nllh.mean().item(),

@@ -215,10 +215,6 @@ class HutterRandomForest:
         return final_mean, final_var
 
 
-
-
-
-
 def calculate_all_distribution_metrics_rf_baseline(
     y_test_orig,
     preds, 
