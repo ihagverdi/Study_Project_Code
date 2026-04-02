@@ -4,6 +4,151 @@ import pickle
 import platform
 import numpy as np
 import torch
+import pandas as pd
+from scipy.stats import wilcoxon
+import warnings
+
+def find_optimal_context(results_list, scenario, target_metric, alpha=0.05, display_results=True):
+    """
+    Rigorously determines the optimal context size using the Principle of Parsimony 
+    and a one-sided Wilcoxon signed-rank test.
+    
+    Parameters:
+    - results_list: List of dictionaries loaded from the .pkl file
+    - scenario: String, the dataset name to filter by
+    - target_metric: String, e.g., "CRPS", "NLLH", "Wasserstein", "KS"
+    - alpha: Float, the statistical significance threshold (default 0.05)
+    
+    Returns:
+    - optimal_context: The selected context size (integer)
+    - summary_df: A pandas DataFrame containing the thesis-ready results table
+    """
+    
+    # ---------------------------------------------------------
+    # STEP 1: Data Extraction & Instance Aggregation
+    # ---------------------------------------------------------
+    records = []
+    for run in results_list:
+        if run['scenario'] == scenario:
+            # Aggregate the 200 instances by taking the mean for the target metric
+            run_data = run['instance_summary'][target_metric]
+            if hasattr(run_data, 'cpu'):
+                run_data = run_data.detach().cpu().numpy()
+            run_score = np.mean(run_data)
+            records.append({
+                'context_size': run['context_size'],
+                'fold': run['fold'],
+                'seed': run['context_seed'],
+                'score': run_score
+            })
+            
+    if not records:
+        raise ValueError(f"No data found for scenario '{scenario}'. Please check the name.")
+        
+    df = pd.DataFrame(records)
+    
+    # ---------------------------------------------------------
+    # STEP 2: Seed Aggregation (Handling intra-fold correlation)
+    # ---------------------------------------------------------
+    # Average the 5 seeds for every (context_size, fold) combination
+    fold_df = df.groupby(['context_size', 'fold'])['score'].mean().reset_index()
+    
+    # ---------------------------------------------------------
+    # STEP 3: Identify the Empirical Best (C_best)
+    # ---------------------------------------------------------
+    # Calculate the grand mean across the 10 independent folds
+    summary_df = fold_df.groupby('context_size')['score'].agg(['mean', 'std']).reset_index()
+    summary_df = summary_df.sort_values('context_size').reset_index(drop=True)
+    
+    # Find the context_size with the absolute lowest mean (since lower error is better)
+    c_best_idx = summary_df['mean'].idxmin()
+    c_best = int(summary_df.loc[c_best_idx, 'context_size'])
+    
+    # Extract the 10 matched fold scores for the empirical best, ensuring order by fold
+    scores_best = fold_df[fold_df['context_size'] == c_best].sort_values('fold')['score'].values
+    
+    # ---------------------------------------------------------
+    # STEP 4: Wilcoxon-Parsimony Test
+    # ---------------------------------------------------------
+    results_log =[]
+    optimal_context = None
+    
+    for _, row in summary_df.iterrows():
+        c_test = int(row['context_size'])
+        mean_test = row['mean']
+        std_test = row['std']
+        
+        # Extract the 10 matched fold scores for the current candidate
+        scores_test = fold_df[fold_df['context_size'] == c_test].sort_values('fold')['score'].values
+        
+        if c_test == c_best:
+            p_value = 1.0  # Comparing to itself
+            is_worse = False
+            status = "*** Empirical Best ***"
+        else:
+            # One-sided Wilcoxon test
+            # H0: c_test and c_best are symmetric.
+            # Ha (greater): scores_test > scores_best (i.e., c_test is strictly WORSE than c_best)
+            try:
+                # Suppress scipy ties warning temporarily to keep terminal clean
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    stat, p_value = wilcoxon(scores_test, scores_best, alternative='greater')
+            except ValueError:
+                # Triggers if differences are exactly 0 across all 10 folds
+                print(f"differences are exactly 0 across all 10 folds")
+                p_value = 1.0 
+                
+            is_worse = p_value < alpha
+            status = "Significantly Worse" if is_worse else "Statistical Tie"
+            
+        # Log the result for the thesis table
+        results_log.append({
+            'Context Size': c_test,
+            f'Mean {target_metric}': mean_test,
+            f'Std {target_metric}': std_test,
+            'p-value (vs Best)': p_value,
+            'Status': status
+        })
+        
+        # Apply Parsimony Rule: 
+        # Select the *smallest* context size that is <= c_best and NOT significantly worse.
+        # Since we iterate in ascending order, the very first non-worse candidate is our optimal!
+        if not is_worse and optimal_context is None and c_test <= c_best:
+            optimal_context = c_test
+
+    # ---------------------------------------------------------
+    # STEP 5: Formatting and Thesis-Ready Output
+    # ---------------------------------------------------------
+    log_df = pd.DataFrame(results_log)
+    # Update the status string of the chosen optimal context for display purposes
+    idx_optimal = log_df.index[log_df['Context Size'] == optimal_context].tolist()[0]
+    if optimal_context != c_best:
+        log_df.at[idx_optimal, 'Status'] += " <-- CHOSEN (Parsimony)"
+    else:
+        log_df.at[idx_optimal, 'Status'] += " <-- CHOSEN"
+        
+    if display_results:        
+        # Formatting for terminal beauty
+        print(f"\n{'='*75}")
+        print(f" Parsimony Analysis | Scenario: {scenario} | Metric: {target_metric}")
+        print(f"{'='*75}")
+        print(f"Empirical Best Context Size (C_best) : {c_best}")
+        print(f"Optimal Context Size Chosen          : {optimal_context}")
+        print("-" * 75)
+        
+        # Pandas display formatting
+        formatters = {
+            f'Mean {target_metric}': '{:.5f}'.format,
+            f'Std {target_metric}': '{:.5f}'.format,
+            'p-value (vs Best)': '{:.4f}'.format
+        }
+        print(log_df.to_string(index=False, formatters=formatters))
+        print(f"{'='*75}\n")
+    
+    return optimal_context, log_df
+
+
 
 def dict_to_cpu(d):
     result = {}
@@ -138,7 +283,7 @@ def load_tabpfn_preds(
             return WindowsPathUnpickler(f).load()
         return pickle.load(f)
 
-def fetch_save_dict(results_dir: pathlib.Path, metadata_dir: pathlib.Path, model_name: str, scenario: str = None) -> None:
+def fetch_save_dict(results_dir: pathlib.Path, metadata_dir: pathlib.Path, model_name: str, search_key: str, search_value: str, scenario: str = None) -> None:
     """Build and save a nested results dictionary filtered by model and scenario."""
     experiment_results_lst = []
 
@@ -151,7 +296,7 @@ def fetch_save_dict(results_dir: pathlib.Path, metadata_dir: pathlib.Path, model
 
         if scenario is not None and results_dict.get("scenario") != scenario:
             continue
-        if results_dict.get("model_name") != model_name:
+        if results_dict.get(search_key) != search_value:
             continue
 
         context_size = results_dict["context_size"]
@@ -164,8 +309,7 @@ def fetch_save_dict(results_dir: pathlib.Path, metadata_dir: pathlib.Path, model
         y_preds = None
         fit_time = None
         predict_time = None
-        fit_gpu = None
-        predict_gpu = None
+        gpu_metrics = None
         hpo_time = None
 
 
@@ -183,8 +327,9 @@ def fetch_save_dict(results_dir: pathlib.Path, metadata_dir: pathlib.Path, model
             hpo_time = results_dict['result_metrics']['hpo_time']
 
         elif model_name == "tabpfn":
-            fit_gpu = results_dict['result_metrics']['fit']
-            predict_gpu = results_dict['result_metrics']['predict']
+            gpu_metrics = results_dict['result_metrics']['mem_time_stats']
+            metrics_summary = results_dict['result_metrics']['metrics_summary']
+            instance_summary = results_dict['result_metrics']['instance_summary']
 
         temp = {
             "scenario": results_dict["scenario"],
@@ -200,8 +345,7 @@ def fetch_save_dict(results_dir: pathlib.Path, metadata_dir: pathlib.Path, model
             "fit_time": fit_time,
             "predict_time": predict_time,
             "hpo_time": hpo_time,
-            "fit_gpu": fit_gpu,
-            "predict_gpu": predict_gpu,
+            "gpu_metrics": gpu_metrics,
             "use_cpu": results_dict["use_cpu"],
         }
 
@@ -209,7 +353,7 @@ def fetch_save_dict(results_dir: pathlib.Path, metadata_dir: pathlib.Path, model
 
     if scenario is None:
         scenario = "all_scenarios"
-    save_file_path = results_dir / f"{model_name}_{scenario}.pkl"
+    save_file_path = results_dir / f"{model_name}_{search_key}_{search_value}_{scenario}.pkl"
     with open(save_file_path, "wb") as f:
         pickle.dump(experiment_results_lst, f)
 

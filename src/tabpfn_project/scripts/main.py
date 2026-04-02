@@ -430,14 +430,14 @@ def train_test_model(
 
     elif model_name == 'naive_baseline':
         assert target_scale in ['log'], "Baseline currently only supports 'log' scaling for the target variable."
-        from tabpfn_project.helper.naive_baseline import calculate_all_distribution_metrics_baseline, get_marginal_empirical_predictor
+        from tabpfn_project.helper.naive_baselines import calculate_all_distribution_metrics_KDE, get_marginal_empirical_predictor
 
         if target_scale == 'log':
             y_train_flat_scaled = log_scaling(y_train_flat)[0]
 
         start_time_baseline = time.perf_counter()
         cdf_object, pdf_object = get_marginal_empirical_predictor(y_train_flat_scaled.ravel())
-        metrics_summary_baseline, instance_summary_baseline = calculate_all_distribution_metrics_baseline(y_test, cdf_object, pdf_object, N_grid_points=N_GRID_POINTS)
+        metrics_summary_baseline, instance_summary_baseline = calculate_all_distribution_metrics_KDE(y_test, cdf_object, pdf_object, N_grid_points=N_GRID_POINTS)
         end_time_baseline_ = time.perf_counter()
 
         results_dict = {

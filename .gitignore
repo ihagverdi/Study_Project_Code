@@ -14,3 +14,6 @@ tasks.txt
 *cache/
 smac3_output/
 *_ignore*
+*.ipynb
+*.csv
+*.png

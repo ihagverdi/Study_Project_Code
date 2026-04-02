@@ -2,7 +2,7 @@ import numpy as np
 from statsmodels.distributions.empirical_distribution import ECDF
 from scipy.stats import gaussian_kde
 import torch
-from tabpfn_project.globals import MAX_CLAMP_VAL_NLLH
+from tabpfn_project.globals import MIN_CLAMP_LLH
 
 def get_marginal_empirical_predictor(y_train_flat):
     """
@@ -24,7 +24,7 @@ def get_marginal_empirical_predictor(y_train_flat):
     
     return cdf_object, pdf_object
 
-def calculate_all_distribution_metrics_baseline(
+def calculate_all_distribution_metrics_KDE(
     y_test_orig,
     cdf_model, 
     pdf_model,
@@ -124,14 +124,15 @@ def calculate_all_distribution_metrics_baseline(
     # 5. VECTORIZED NLLH (in log-space)
     # =========================================================
     # Evaluate the Gaussian KDE.
-    nlog_pdf = -pdf_model.logpdf(z_test_np.flatten()).reshape(B, O)
+    llh = pdf_model.logpdf(z_test_np.flatten()).reshape(B, O)
+    
+    llh = np.clip(llh, a_min=MIN_CLAMP_LLH, a_max=None)
+
     jacobian_correction = -np.log(np.max(z_test_np, axis=1))
 
-    assert nlog_pdf.shape[0] == jacobian_correction.shape[0] == B, "Batch size mismatch in NLLH calculation"
+    assert llh.shape[0] == jacobian_correction.shape[0] == B, "Batch size mismatch in LLH calculation"
     
-    nlog_pdf = np.clip(nlog_pdf, a_min=None, a_max=MAX_CLAMP_VAL_NLLH)
-    
-    all_nllh = nlog_pdf.mean(axis=1) + jacobian_correction
+    all_nllh = -llh.mean(axis=1) + jacobian_correction
 
     # =========================================================
     # 6. SUMMARY & RETURNS
