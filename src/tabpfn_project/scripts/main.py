@@ -15,6 +15,8 @@ from tabpfn_project.helper.preprocess import (
     preprocess_features,
 )
 
+from tabpfn_project.helper.utils import subsample_features, subsample_flattened_data, subsample_targets_per_instance
+
 # import globals
 from tabpfn_project.globals import N_GRID_POINTS, RANDOM_STATE
 from sklearn.model_selection import KFold, train_test_split
@@ -88,6 +90,7 @@ def train_test_model(
     wc_time_limit,
     do_hpo,
     hpo_time,
+    feature_agnostic,
 ):
     assert 0 <= fold <= 9, "Fold must be between 0 and 9"
     
@@ -108,7 +111,6 @@ def train_test_model(
         print(f"Subsampling the training data to {samples_per_instance} samples per instance (without replacement).")
         assert 1 <= samples_per_instance <= 100, "num_samples_per_instance must be between 1 and 100"
         assert seed_samples_per_instance is not None, "seed_samples_per_instance must be provided"
-        from tabpfn_project.helper.utils import subsample_targets_per_instance
         y_train = subsample_targets_per_instance(y_train, samples_per_instance, seed_samples_per_instance)
     
 
@@ -122,7 +124,6 @@ def train_test_model(
         assert seed_context_size is not None, "seed_context must be provided when context_size is specified."
         assert 1 <= context_size <= X_train_flat.shape[0], "invalid context_size value."
         if context_size < X_train_flat.shape[0]:
-            from tabpfn_project.helper.utils import subsample_flattened_data
 
             print(f"Subsampling the training data to context size {context_size} using method '{subsample_method}'")
             X_train_flat, y_train_flat = subsample_flattened_data(X_train_flat, y_train_flat, context_size=context_size, seed=seed_context_size, subsample_method=subsample_method)
@@ -134,7 +135,6 @@ def train_test_model(
         assert seed_feature_drop_rate is not None, "seed_features must be provided when feature_drop_rate > 0.0"
         assert feature_drop_rate <= 1.0, "feature_drop_rate must be <=1.0"
 
-        from tabpfn_project.helper.utils import subsample_features
         print(f"Sampling features with drop rate {feature_drop_rate}")
 
         X_train_flat, X_test = subsample_features(X_train_flat, X_test, drop_rate=feature_drop_rate, seed=seed_feature_drop_rate)
@@ -238,35 +238,51 @@ def train_test_model(
         distnet_predict_time = time.perf_counter() - distnet_predict_time_start
 
         assert y_scale is not None, "y_scale should not be None for DistNet when using max_scaling."
+
         results_dict = {
-            'model_name': 'distnet',
-            'model_config': model.model.state_dict(),
+            'model_name': model_name,
             'scenario': scenario,
             'fold': fold,
-            'seed_context': seed_context_size,
-            'seed_features': seed_feature_drop_rate,
+
+            'seed_context_size': seed_context_size,
+            'seed_feature_drop_rate': seed_feature_drop_rate,
             'seed_samples_per_instance': seed_samples_per_instance,
+
             'feature_drop_rate': feature_drop_rate,
             'context_size': context_size,
             'target_scale': target_scale,
             'subsample_method': subsample_method,
             'num_samples_per_instance': samples_per_instance,
             'use_cpu': use_cpu,
-            'early_stopping': early_stopping,
-            'early_stopping_patience': early_stopping_patience,
-            'E_final': E_final,
             'save_dir': save_dir,
-            'n_epochs': n_epochs,
-            'batch_size': batch_size,
-            'wc_time_limit': wc_time_limit,
-            'test_preds': y_pred,
-            'random_state': RANDOM_STATE,
             'n_features': X_train_flat.shape[1],
-            'y_scale': y_scale,
+            'feature_agnostic': feature_agnostic,
+
+            'y_test_preds': y_pred,
+
+            'do_hpo': do_hpo,
+            'hpo_time': hpo_time,
+
             'result_metrics': {
+                'metrics_summary': None,
+                'instance_summary': None,
+            },
+
+            'model_specific_info': {
+                'model_config': model.model.state_dict(),
+                'random_state': RANDOM_STATE,
+                'early_stopping': early_stopping,
+                'early_stopping_patience': early_stopping_patience,
+                'E_final': E_final,
+                'n_epochs': n_epochs,
+                'batch_size': batch_size,
+                'wc_time_limit': wc_time_limit,
+                'y_scale': y_scale,
                 'fit_time': distnet_fit_time,
                 'predict_time': distnet_predict_time,
-            }
+            },
+
+            'hpo_results': dict(),
         }
 
     elif model_name == 'tabpfn':
@@ -280,9 +296,7 @@ def train_test_model(
             y_train_flat = log_scaling(y_train_flat)[0]
         elif target_scale == "original":
             pass  # no scaling
-        
-        # no preprocessing of features for TabPFN
-
+    
         # initialize and train model
         device = torch.device('cuda' if (torch.cuda.is_available() and not use_cpu) else 'cpu')
         print(f"TabPFN using device: {device}")
@@ -304,6 +318,10 @@ def train_test_model(
         }
 
         model = TabPFNRegressor(device=device, random_state=RANDOM_STATE, ignore_pretraining_limits=True)
+
+        if feature_agnostic:
+            print("Feature agnostic mode on: dropping all features.")
+            X_train_flat, X_test = subsample_features(X_train_flat, X_test, drop_rate=1.0, seed=-1)
 
         with track_gpu_memory_and_time(device) as stats:
             model.fit(X_train_flat, y_train_flat.ravel())
@@ -333,26 +351,40 @@ def train_test_model(
         metrics_summary_pfn, instance_summary_pfn = calculate_distribution_metrics_logspace_tabpfn(y_test, tabpfn_preds_full, device=device, target_scale=target_scale, N_grid_points=N_GRID_POINTS)
 
         results_dict = {
-            'model_name': 'tabpfn',
+            'model_name': model_name,
             'scenario': scenario,
             'fold': fold,
-            'seed_context': seed_context_size,
-            'seed_features': seed_feature_drop_rate,
+
+            'seed_context_size': seed_context_size,
+            'seed_feature_drop_rate': seed_feature_drop_rate,
             'seed_samples_per_instance': seed_samples_per_instance,
-            'feature_drop_rate': feature_drop_rate,
+
             'context_size': context_size,
-            'target_scale': target_scale,
             'subsample_method': subsample_method,
             'num_samples_per_instance': samples_per_instance,
+            'feature_drop_rate': feature_drop_rate,
+            'target_scale': target_scale,
+            'n_features': X_train_flat.shape[1],
+            'feature_agnostic': feature_agnostic,
+
             'use_cpu': use_cpu,
             'save_dir': save_dir,
-            'val_batch_size': val_batch_size,
-            'random_state': RANDOM_STATE,
-            'n_features': X_train_flat.shape[1],
+
+            'do_hpo': do_hpo,
+            'hpo_time': hpo_time,
+            'hpo_results': dict(),
+
+            'y_test_preds': None,
+
             'result_metrics': {
-                'mem_time_stats': mem_time_stats,
                 'metrics_summary': metrics_summary_pfn,
                 'instance_summary': instance_summary_pfn,
+            },
+
+            'model_specific_info': {
+                'random_state': RANDOM_STATE,
+                'val_batch_size': val_batch_size,
+                'mem_time_stats': mem_time_stats,
             },
         }
 
@@ -556,6 +588,8 @@ if __name__ == "__main__":
                         help="DistNet scenario.")
     parser.add_argument("--model", type=str, required=True, choices=MODEL_CHOICES,
                         help="Model to run.")
+    parser.add_argument("--feature_agnostic", action="store_true",
+                        help="Whether the ML model should ignore the instance features.")
     parser.add_argument("--fold", type=int, required=True, choices=range(10),
                         help="CV fold index.")
     parser.add_argument("--samples_per_instance", type=int, default=100, choices=range(1, 101),
@@ -618,6 +652,7 @@ if __name__ == "__main__":
         seed_samples_per_instance=args.seed_samples_per_instance,
         do_hpo=args.do_hpo,
         hpo_time=args.hpo_time,
+        feature_agnostic=args.feature_agnostic,
     )
     end = time.perf_counter()
     print(f"✅ Experiment completed in {end - start:.2f} seconds.")
