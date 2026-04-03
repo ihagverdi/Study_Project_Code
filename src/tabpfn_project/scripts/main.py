@@ -20,6 +20,7 @@ from tabpfn_project.globals import N_GRID_POINTS, RANDOM_STATE
 from sklearn.model_selection import KFold, train_test_split
 from tabpfn_project.helper.scalers import max_scaling, log_scaling
 from tabpfn_project.paths import RESULTS_DIR, DISTNET_DATA_DIR
+from tabpfn_project.globals import DISTNET_SCENARIOS
 
 @contextlib.contextmanager
 def track_gpu_memory_and_time(device_input):
@@ -71,14 +72,14 @@ def train_test_model(
     scenario,
     fold,
     save_dir,
-    num_samples_per_instance,
+    samples_per_instance,
     context_size,
     use_cpu,
     target_scale,
     subsample_method,
     early_stopping,
-    seed_context,
-    seed_features,
+    seed_context_size,
+    seed_feature_drop_rate,
     feature_drop_rate,
     val_batch_size,
     seed_samples_per_instance,
@@ -89,9 +90,6 @@ def train_test_model(
     hpo_time,
 ):
     assert 0 <= fold <= 9, "Fold must be between 0 and 9"
-
-    if do_hpo:
-        assert hpo_time is not None and hpo_time > 0, "hpo_time must be a positive integer when do_hpo is True"
     
     # Create save directory if it doesn't exist
     clean_name = save_dir.lstrip('/\\')
@@ -106,40 +104,42 @@ def train_test_model(
     assert len(X_train) == len(y_train) and len(X_test) == len(y_test), "X and y must have the same length."
     assert y_train.shape[1] == 100 and y_test.shape[1] == 100, "Data must have 100 runtime observations per instance."
 
-    if num_samples_per_instance != 100:  # 100 is the full data
-        print(f"Subsampling the training data to {num_samples_per_instance} samples per instance (without replacement).")
-        assert 1 <= num_samples_per_instance <= 100, "num_samples_per_instance must be between 1 and 100"
+    if samples_per_instance != 100:  # 100 is the full data
+        print(f"Subsampling the training data to {samples_per_instance} samples per instance (without replacement).")
+        assert 1 <= samples_per_instance <= 100, "num_samples_per_instance must be between 1 and 100"
         assert seed_samples_per_instance is not None, "seed_samples_per_instance must be provided"
         from tabpfn_project.helper.utils import subsample_targets_per_instance
-        y_train = subsample_targets_per_instance(y_train, num_samples_per_instance, seed_samples_per_instance)
+        y_train = subsample_targets_per_instance(y_train, samples_per_instance, seed_samples_per_instance)
     
 
     # Flatten the whole training set
-    X_train_flat = np.repeat(X_train, repeats=num_samples_per_instance, axis=0)
+    X_train_flat = np.repeat(X_train, repeats=samples_per_instance, axis=0)
     y_train_flat = y_train.reshape(-1, 1)
 
     assert X_train_flat.shape[0] == y_train_flat.shape[0], "After flattening, X and y must have the same number of samples."
 
     if context_size is not None:
-        assert seed_context is not None, "seed_context must be provided when context_size is specified."
+        assert seed_context_size is not None, "seed_context must be provided when context_size is specified."
         assert 1 <= context_size <= X_train_flat.shape[0], "invalid context_size value."
         if context_size < X_train_flat.shape[0]:
             from tabpfn_project.helper.utils import subsample_flattened_data
 
             print(f"Subsampling the training data to context size {context_size} using method '{subsample_method}'")
-            X_train_flat, y_train_flat = subsample_flattened_data(X_train_flat, y_train_flat, context_size=context_size, seed=seed_context, subsample_method=subsample_method)
+            X_train_flat, y_train_flat = subsample_flattened_data(X_train_flat, y_train_flat, context_size=context_size, seed=seed_context_size, subsample_method=subsample_method)
     
     # remove constant features
     X_train_flat, X_test = delete_constant_features(X_train_flat, X_test)
 
-    if feature_drop_rate is not None:
-        assert seed_features is not None, "seed_features must be provided when feature_drop_rate > 0.0"
-        assert 0.0 < feature_drop_rate <= 1.0, "feature_drop_rate must be in (0.0, 1.0]"
+    if feature_drop_rate is not None and feature_drop_rate > 0.0:
+        assert seed_feature_drop_rate is not None, "seed_features must be provided when feature_drop_rate > 0.0"
+        assert feature_drop_rate <= 1.0, "feature_drop_rate must be <=1.0"
+
         from tabpfn_project.helper.utils import subsample_features
         print(f"Sampling features with drop rate {feature_drop_rate}")
-        X_train_flat, X_test = subsample_features(X_train_flat, X_test, drop_rate=feature_drop_rate, seed=seed_features)
-    
-    results_dict = None  # the ultimate dict to store after model fit&predict
+
+        X_train_flat, X_test = subsample_features(X_train_flat, X_test, drop_rate=feature_drop_rate, seed=seed_feature_drop_rate)
+
+    results_dict = None  # the dict to store after model fit&predict
     if model_name == 'distnet':
         from tabpfn_project.helper.distnet_lognormal import DistNetModel
 
@@ -243,14 +243,14 @@ def train_test_model(
             'model_config': model.model.state_dict(),
             'scenario': scenario,
             'fold': fold,
-            'seed_context': seed_context,
-            'seed_features': seed_features,
+            'seed_context': seed_context_size,
+            'seed_features': seed_feature_drop_rate,
             'seed_samples_per_instance': seed_samples_per_instance,
             'feature_drop_rate': feature_drop_rate,
             'context_size': context_size,
             'target_scale': target_scale,
             'subsample_method': subsample_method,
-            'num_samples_per_instance': num_samples_per_instance,
+            'num_samples_per_instance': samples_per_instance,
             'use_cpu': use_cpu,
             'early_stopping': early_stopping,
             'early_stopping_patience': early_stopping_patience,
@@ -322,8 +322,8 @@ def train_test_model(
         mem_time_stats["predict"]["spike_mb"] = stats["spike_mb"]
         mem_time_stats["predict"]["time_s"] = stats["time_s"]
 
-        tabpfn_preds_full_fileName = (f"{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_{seed_samples_per_instance}_{feature_drop_rate}_"
-                         f"{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}_{'cpu' if use_cpu else 'gpu'}_test_preds.pkl")
+        tabpfn_preds_full_fileName = (f"{model_name}_{scenario}_{fold}_{seed_context_size}_{seed_feature_drop_rate}_{seed_samples_per_instance}_{feature_drop_rate}_"
+                         f"{context_size}_{target_scale}_{subsample_method}_{samples_per_instance}_{'cpu' if use_cpu else 'gpu'}_test_preds.pkl")
 
         os.makedirs(os.path.join(save_dir, "tabpfn_preds_full"), exist_ok=True)
         tabpfn_preds_full_path = os.path.join(save_dir, "tabpfn_preds_full", tabpfn_preds_full_fileName)
@@ -336,20 +336,19 @@ def train_test_model(
             'model_name': 'tabpfn',
             'scenario': scenario,
             'fold': fold,
-            'seed_context': seed_context,
-            'seed_features': seed_features,
+            'seed_context': seed_context_size,
+            'seed_features': seed_feature_drop_rate,
             'seed_samples_per_instance': seed_samples_per_instance,
             'feature_drop_rate': feature_drop_rate,
             'context_size': context_size,
             'target_scale': target_scale,
             'subsample_method': subsample_method,
-            'num_samples_per_instance': num_samples_per_instance,
+            'num_samples_per_instance': samples_per_instance,
             'use_cpu': use_cpu,
             'save_dir': save_dir,
             'val_batch_size': val_batch_size,
             'random_state': RANDOM_STATE,
             'n_features': X_train_flat.shape[1],
-            'scaler_args': args,
             'result_metrics': {
                 'mem_time_stats': mem_time_stats,
                 'metrics_summary': metrics_summary_pfn,
@@ -359,74 +358,6 @@ def train_test_model(
 
         print(f"TabPFN results for scenario={scenario}, fold={fold}:")
         print(f"  Metrics Summary: {metrics_summary_pfn.items()}")
-
-    elif model_name == 'ngboost':
-        assert target_scale == 'max', "NGBoost currently only supports 'max' scaling for the target variable."
-        from tabpfn_project.helper.tree_based_models import train_evaluate_ngboost
-
-        X_train_flat, X_test = preprocess_features(X_train_flat, X_test)
-        if target_scale == 'max':
-            y_train_flat_scaled, y_scale = max_scaling(y_train_flat)
-        y_preds_ngboost, best_params_ngboost, fit_time_ngboost, predict_time_ngboost = train_evaluate_ngboost(X_train_flat, y_train_flat_scaled.ravel(), X_test, do_hpo, hpo_time)
-        
-        results_dict = {
-            'model_name': 'ngboost',
-            'best_params': best_params_ngboost,
-            'scenario': scenario,
-            'fold': fold,
-            'seed_context': seed_context,
-            'seed_features': seed_features,
-            'seed_samples_per_instance': seed_samples_per_instance,
-            'feature_drop_rate': feature_drop_rate,
-            'context_size': context_size,
-            'target_scale': target_scale,
-            'subsample_method': subsample_method,
-            'num_samples_per_instance': num_samples_per_instance,
-            'use_cpu': use_cpu,
-            'save_dir': save_dir,
-            'test_preds': y_preds_ngboost,
-            'random_state': RANDOM_STATE,
-            'n_features': X_train_flat.shape[1],
-            'y_scale': y_scale,
-            'result_metrics': {
-                'fit_time': fit_time_ngboost,
-                'predict_time': predict_time_ngboost,
-            }
-        }
-
-    elif model_name == 'qrf':
-        assert target_scale == 'log', "Quantile Regression Forest currently only supports 'log' scaling for the target variable."
-        from tabpfn_project.helper.tree_based_models import train_evaluate_qrf
-
-        X_train_flat, X_test = preprocess_features(X_train_flat, X_test)
-        if target_scale == 'log':
-            y_train_flat_scaled = log_scaling(y_train_flat)[0]
-
-        y_preds_quantiles_qrf, best_params_qrf, fit_time_qrf, predict_time_qrf = train_evaluate_qrf(X_train_flat, y_train_flat_scaled.ravel(), X_test, do_hpo, hpo_time)
-
-        results_dict = {
-            'model_name': 'qrf',
-            'best_params': best_params_qrf,
-            'scenario': scenario,
-            'fold': fold,
-            'seed_context': seed_context,
-            'seed_features': seed_features,
-            'seed_samples_per_instance': seed_samples_per_instance,
-            'feature_drop_rate': feature_drop_rate,
-            'context_size': context_size,
-            'target_scale': target_scale,
-            'subsample_method': subsample_method,
-            'num_samples_per_instance': num_samples_per_instance,
-            'use_cpu': use_cpu,
-            'save_dir': save_dir,
-            'test_preds': y_preds_quantiles_qrf,
-            'random_state': RANDOM_STATE,
-            'n_features': X_train_flat.shape[1],
-            'result_metrics': {
-                'fit_time': fit_time_qrf,
-                'predict_time': predict_time_qrf,
-            }
-        }
 
     elif model_name == 'naive_baseline':
         assert target_scale in ['log'], "Baseline currently only supports 'log' scaling for the target variable."
@@ -444,14 +375,14 @@ def train_test_model(
             'model_name': 'baseline',
             'scenario': scenario,
             'fold': fold,
-            'seed_context': seed_context,
-            'seed_features': seed_features,
+            'seed_context': seed_context_size,
+            'seed_features': seed_feature_drop_rate,
             'seed_samples_per_instance': seed_samples_per_instance,
             'feature_drop_rate': feature_drop_rate,
             'context_size': context_size,
             'target_scale': target_scale,
             'subsample_method': subsample_method,
-            'num_samples_per_instance': num_samples_per_instance,
+            'num_samples_per_instance': samples_per_instance,
             'use_cpu': use_cpu,
             'save_dir': save_dir,
             'test_preds': [metrics_summary_baseline, instance_summary_baseline],
@@ -473,7 +404,10 @@ def train_test_model(
         # log-scale the targets
         assert target_scale == 'log', "Random Forest baseline currently only supports 'log' scaling for the target variable."
         y_train_flat_scaled = log_scaling(y_train_flat)[0]
-
+        
+        if do_hpo:
+            assert hpo_time is not None and hpo_time > 0, "hpo_time must be a positive integer when do_hpo is True"
+        
         if do_hpo:
             print(f"Starting SMAC3 HPO for rf_baseline with a walltime limit of {hpo_time} seconds...")
             hpo_start_time = time.perf_counter()
@@ -571,14 +505,14 @@ def train_test_model(
             'best_params': best_params_rf,
             'scenario': scenario,
             'fold': fold,
-            'seed_context': seed_context,
-            'seed_features': seed_features,
+            'seed_context': seed_context_size,
+            'seed_features': seed_feature_drop_rate,
             'seed_samples_per_instance': seed_samples_per_instance,
             'feature_drop_rate': feature_drop_rate,
             'context_size': context_size,
             'target_scale': target_scale,
             'subsample_method': subsample_method,
-            'num_samples_per_instance': num_samples_per_instance,
+            'num_samples_per_instance': samples_per_instance,
             'use_cpu': use_cpu,
             'save_dir': save_dir,
             'test_preds': [rf_means, rf_variances],
@@ -598,8 +532,8 @@ def train_test_model(
         raise ValueError(f"Unsupported model_name: {model_name}")
     
     assert results_dict is not None, "results_dict is NONE"
-    results_file_name = (f"{model_name}_{scenario}_{fold}_{seed_context}_{seed_features}_{seed_samples_per_instance}_{feature_drop_rate}_"
-                         f"{context_size}_{target_scale}_{subsample_method}_{num_samples_per_instance}_{early_stopping}_{'cpu' if use_cpu else 'gpu'}.pkl")
+    results_file_name = (f"{model_name}_{scenario}_{fold}_{seed_context_size}_{seed_feature_drop_rate}_{seed_samples_per_instance}_{feature_drop_rate}_"
+                         f"{context_size}_{target_scale}_{subsample_method}_{samples_per_instance}_{early_stopping}_{'cpu' if use_cpu else 'gpu'}.pkl")
 
     os.makedirs(os.path.join(save_dir, "metadata"), exist_ok=True)
     results_save_path = os.path.join(save_dir, "metadata", results_file_name)
@@ -610,30 +544,54 @@ def train_test_model(
 
     
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Train Model for Given Scenario (DistNet or TabPFN)')
+    MODEL_CHOICES = ["distnet", "tabpfn", "naive_baseline", "rf_baseline"]
+    TARGET_SCALE_CHOICES = ["log", "max", "original"]
+    SUBSAMPLE_METHOD_CHOICES = ["flatten-random"]
 
-    parser.add_argument('--scenario', type=str, required=True, help='Scenario name (e.g., lpg-zeno, clasp_factoring)')
-    parser.add_argument('--model', type=str, required=True, help='model type to train (distnet, tabpfn, ngboost, qrf, naive_baseline, rf_baseline)')
-    parser.add_argument('--fold', type=int, required=True, help='Cross-validation fold index (0-9)')
-    parser.add_argument('--num_samples_per_instance', type=int, default=100, help='Number of training samples per instance (1-100)')
-    parser.add_argument('--val_batch_size', type=int, default=1000, help='Validation batch size for TabPFN (default: 1000)')
-    parser.add_argument('--target_scale', type=str, required=True, help='Target scaling method (log, max, original)')
-    parser.add_argument('--subsample_method', type=str, default=None, help='Sampling method (flatten-random)')
-    parser.add_argument('--context_size', type=int, default=None, help='Number of flattened training samples (default: None, use all)')
-    parser.add_argument('--feature_drop_rate', type=float, default=None, help='Feature drop rate (default: None, use all features)')
-    parser.add_argument('--seed_context', type=int, default=None, help='Random seed for sampling context')
-    parser.add_argument('--seed_features', type=int, default=None, help='Random seed for sampling features')
-    parser.add_argument('--seed_samples_per_instance', type=int, default=None, help='Random seed for sampling samples per instance')
-    parser.add_argument('--save_dir', type=str, required=True, help='Directory to save the results')
-    parser.add_argument('--n_epochs', type=int, default=1000, help='Max training epochs for DistNet (default: 1000)')
-    parser.add_argument('--batch_size', type=int, default=16, help='Mini-batch size for DistNet training (default: 16)')
-    parser.add_argument('--wc_time_limit', type=int, default=60*59, help='Wall-clock time limit in seconds per DistNet training run (default: 3540)')
-    parser.add_argument('--early_stopping', action='store_true', help='Enable adaptive epoch search (find_optimal_epochs) for DistNet')
-    parser.add_argument('--use_cpu', action='store_true', help='add this flag to use CPU instead of GPU (if applicable)')
-    parser.add_argument('--do_hpo', action='store_true', help='add this flag to perform hyperparameter optimization')
-    parser.add_argument('--hpo_time', type=int, default=None, help='Wall-clock time limit in seconds for hyperparameter optimization')
+    parser = argparse.ArgumentParser(
+        description="Train/evaluate one model on one scenario/fold."
+    )
 
-
+    parser.add_argument("--scenario", type=str, required=True, choices=DISTNET_SCENARIOS,
+                        help="DistNet scenario.")
+    parser.add_argument("--model", type=str, required=True, choices=MODEL_CHOICES,
+                        help="Model to run.")
+    parser.add_argument("--fold", type=int, required=True, choices=range(10),
+                        help="CV fold index.")
+    parser.add_argument("--samples_per_instance", type=int, default=100, choices=range(1, 101),
+                        help="Targets per train instance.")
+    parser.add_argument("--val_batch_size", type=int, default=1000,
+                        help="TabPFN prediction batch size.")
+    parser.add_argument("--target_scale", type=str, required=True, choices=TARGET_SCALE_CHOICES,
+                        help="Target scaling.")
+    parser.add_argument("--subsample_method", type=str, default='flatten-random', choices=SUBSAMPLE_METHOD_CHOICES,
+                        help="Context subsampling method.")
+    parser.add_argument("--context_size", type=int, default=None,
+                        help="Flattened train set size.")
+    parser.add_argument("--feature_drop_rate", type=float, default=None,
+                        help="Fraction of features to drop.")
+    parser.add_argument("--seed_context_size", type=int, default=None,
+                        help="Seed for context sampling.")
+    parser.add_argument("--seed_feature_drop_rate", type=int, default=None,
+                        help="Seed for feature sampling.")
+    parser.add_argument("--seed_samples_per_instance", type=int, default=None,
+                        help="Seed for target subsampling.")
+    parser.add_argument("--save_dir", type=str, required=True,
+                        help="Output subdirectory under RESULTS_DIR.")
+    parser.add_argument("--n_epochs", type=int, default=1000,
+                        help="DistNet max epochs.")
+    parser.add_argument("--batch_size", type=int, default=16,
+                        help="DistNet batch size.")
+    parser.add_argument("--wc_time_limit", type=int, default=60 * 59,
+                        help="DistNet wall-clock limit (s).")
+    parser.add_argument("--early_stopping", action="store_true",
+                        help="Enable DistNet early stopping.")
+    parser.add_argument("--use_cpu", action="store_true",
+                        help="Force CPU.")
+    parser.add_argument("--do_hpo", action="store_true",
+                        help="Enable HPO.")
+    parser.add_argument("--hpo_time", type=int, default=None,
+                        help="HPO wall-clock limit (s).")
 
     args = parser.parse_args()
     
@@ -644,14 +602,14 @@ if __name__ == "__main__":
         scenario=args.scenario,
         fold=args.fold,
         save_dir=args.save_dir,
-        num_samples_per_instance=args.num_samples_per_instance,
+        samples_per_instance=args.samples_per_instance,
         context_size=args.context_size,
         use_cpu=args.use_cpu,
         target_scale=args.target_scale,
         subsample_method=args.subsample_method,
         early_stopping=args.early_stopping,
-        seed_context=args.seed_context,
-        seed_features=args.seed_features,
+        seed_context_size=args.seed_context_size,
+        seed_feature_drop_rate=args.seed_feature_drop_rate,
         feature_drop_rate=args.feature_drop_rate,
         val_batch_size=args.val_batch_size,
         n_epochs=args.n_epochs,

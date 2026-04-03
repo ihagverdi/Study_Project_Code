@@ -213,6 +213,7 @@ def subsample_flattened_data(X_train_flat, y_train_flat, context_size, seed, sub
 def subsample_features(X_train, *arrays, drop_rate, seed):
     """
     Randomly samples a subset of features from the input arrays based on the specified drop rate.
+    If drop_rate >= 1.0, implements a strict marginal baseline (0 features) via a dummy column.
     
     Args:
         X_train: (n_samples, n_features)
@@ -222,18 +223,24 @@ def subsample_features(X_train, *arrays, drop_rate, seed):
 
     Returns:
         Tuple of subsampled arrays, with the same order as input (X_train, *arrays)
-
     """
+    
+    # 1. Handle the "0 Features" Marginal Baseline
+    if drop_rate >= 1.0:
+        dummy_X_train = X_train[:, :1] * 0.0
+        processed_arrays = [arr[:, :1] * 0.0 for arr in arrays]
+        
+        return (dummy_X_train, *processed_arrays)
 
+    # 2. Handle standard feature subsampling
     rng = np.random.default_rng(seed=seed)
     n_features = X_train.shape[1]
-
-    if drop_rate == 1:  # dropping all but one feature
-        size_features = 1
-    else:
-        size_features = max(1, int(n_features * (1 - drop_rate)))
-        
+    
+    # Calculate how many features to KEEP. 
+    size_features = max(1, int(n_features * (1 - drop_rate)))
+    
     feature_idx = rng.choice(n_features, size=size_features, replace=False)
+    
     processed_arrays = [arr[:, feature_idx] for arr in arrays]
 
     return (X_train[:, feature_idx], *processed_arrays)
