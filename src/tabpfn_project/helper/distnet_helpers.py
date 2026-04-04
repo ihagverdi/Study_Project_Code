@@ -1,6 +1,6 @@
 import torch
 
-from tabpfn_project.globals import MAX_CLAMP_VAL_NLLH, MIN_CLAMP_LLH
+from tabpfn_project.globals import MIN_CLAMP_LLH
 
 def calculate_all_distribution_metrics_distnet_logspace(
     y_test_orig,
@@ -124,6 +124,8 @@ def calculate_all_distribution_metrics_distnet_logspace(
     # =========================================================
     y_test_scaled = y_test_orig * y_scaler
     llh = dist.log_prob(y_test_scaled)  # shape (B, O)
+    
+    assert llh.shape == y_test_scaled.shape, f"Shape mismatch: {llh.shape} vs {y_test_scaled.shape}"
     llh.clamp_(min=MIN_CLAMP_LLH)
  
 

@@ -70,6 +70,9 @@ class DistNetModel:
         # validation data - direct device placement
         self.validation_available = (X_valid is not None and y_valid is not None)
         if self.validation_available:
+            assert X_valid.ndim == 2
+            assert y_valid.ndim == 2 and y_valid.shape[-1] == 1
+
             self.X_valid = torch.as_tensor(X_valid, dtype=torch.float32, device=self.device)
             self.y_valid = torch.as_tensor(y_valid, dtype=torch.float32, device=self.device)
 

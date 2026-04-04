@@ -142,6 +142,7 @@ def train_test_model(
     results_dict = None  # the dict to store after model fit&predict
     if model_name == 'distnet':
         from tabpfn_project.helper.distnet_lognormal import DistNetModel
+        from tabpfn_project.helper.distnet_helpers import calculate_all_distribution_metrics_distnet_logspace
 
         assert target_scale in ['max'], "DistNet only supports 'max' scaling currently."
 
@@ -239,6 +240,9 @@ def train_test_model(
 
         assert y_scale is not None, "y_scale should not be None for DistNet when using max_scaling."
 
+        device = torch.device('cpu')
+        metrics_summary_distnet, instance_summary_distnet = calculate_all_distribution_metrics_distnet_logspace(y_test, y_pred, device=device, y_scaler=y_scale, N_grid_points=N_GRID_POINTS)
+
         results_dict = {
             'model_name': model_name,
             'scenario': scenario,
@@ -264,8 +268,8 @@ def train_test_model(
             'hpo_time': hpo_time,
 
             'result_metrics': {
-                'metrics_summary': None,
-                'instance_summary': None,
+                'metrics_summary': metrics_summary_distnet,
+                'instance_summary': instance_summary_distnet,
             },
 
             'model_specific_info': {
@@ -391,7 +395,7 @@ def train_test_model(
         print(f"TabPFN results for scenario={scenario}, fold={fold}:")
         print(f"  Metrics Summary: {metrics_summary_pfn.items()}")
 
-    elif model_name == 'naive_baseline':
+    elif model_name == 'baseline_kde':
         assert target_scale in ['log'], "Baseline currently only supports 'log' scaling for the target variable."
         from tabpfn_project.helper.naive_baselines import calculate_all_distribution_metrics_KDE, get_marginal_empirical_predictor
 
@@ -426,7 +430,7 @@ def train_test_model(
             }
         }
     
-    elif model_name == 'rf_baseline':
+    elif model_name == 'baseline_rf':
         from smac import HyperparameterOptimizationFacade, Scenario
         from ConfigSpace import Configuration, ConfigurationSpace
         from ConfigSpace.hyperparameters import UniformFloatHyperparameter, UniformIntegerHyperparameter
@@ -576,7 +580,7 @@ def train_test_model(
 
     
 if __name__ == "__main__":
-    MODEL_CHOICES = ["distnet", "tabpfn", "naive_baseline", "rf_baseline"]
+    MODEL_CHOICES = ["distnet", "tabpfn", "baseline_kde", "baseline_rf"]
     TARGET_SCALE_CHOICES = ["log", "max", "original"]
     SUBSAMPLE_METHOD_CHOICES = ["flatten-random"]
 
