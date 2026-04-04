@@ -3,7 +3,7 @@ import numpy as np
 def max_scaling(y_train, *arrays):
     """
     Scales y_train and any number of other arrays by the max of y_train.
-    Usage: y_train, y_val, y_test = max_scaling(y_train, y_val, y_test)
+    Returns scaled arrays followed by the scale factor.
     """
     y_max = np.max(y_train)
     scale = 1 if y_max == 0 else (1.0 / y_max)
@@ -13,7 +13,7 @@ def max_scaling(y_train, *arrays):
     # Apply scale to all other arrays
     processed_arrays = [arr * scale for arr in arrays]
     
-    return (y_train_scaled, *processed_arrays, scale)
+    return y_train_scaled, *processed_arrays, scale
 
 def log_scaling(y_train, *arrays):
     """
@@ -25,7 +25,7 @@ def log_scaling(y_train, *arrays):
     # Apply log to all other arrays
     processed_arrays = [np.log1p(arr) for arr in arrays]
     
-    return (y_train_logged, *processed_arrays)
+    return y_train_logged, *processed_arrays
 
 def z_score_scaling(y_train, *arrays):
     """
@@ -46,4 +46,4 @@ def z_score_scaling(y_train, *arrays):
     processed_arrays = [(arr - mean) / std for arr in arrays]
     
     # Return: (Train, Val, Test, ..., Mean, Std)
-    return (y_train_scaled, *processed_arrays, mean, std)
+    return y_train_scaled, *processed_arrays, mean, std

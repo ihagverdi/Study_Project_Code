@@ -1,47 +1,44 @@
-from tabpfn_project.paths import DISTNET_DATA_DIR
-
-def get_sc_dict():
-    data_dir = DISTNET_DATA_DIR
+def get_sc_dict(distnet_data_dir):
     sc_dict = {
      "clasp_factoring":
       {"scen": "clasp-3.0.4-p8_rand_factoring",
-      "features": "%s/clasp-3.0.4-p8_rand_factoring/features.txt" % data_dir,
+      "features": "%s/clasp-3.0.4-p8_rand_factoring/features.txt" % distnet_data_dir,
       "domain": "sat",
       "use": ('SAT',),
       "cutoff": 5000},
      "saps-CVVAR":
      {"scen": "CP06_CV-VAR",
-      "features": "%s/CP06_CV-VAR/features.txt" % data_dir,
+      "features": "%s/CP06_CV-VAR/features.txt" % distnet_data_dir,
       "domain": "sat",
       "use": ('SAT',),
       "cutoff": 60},
      "spear_qcp":
       {"scen": "spear_qcp-hard",
-       "features": "%s/spear_qcp-hard/features.txt" % data_dir,
+       "features": "%s/spear_qcp-hard/features.txt" % distnet_data_dir,
        "domain": "sat",
        "use": ('SAT',),
        "cutoff": 5000},
      "yalsat_qcp":
       {"scen": "yalsat_qcp-hard",
-       "features": "%s/yalsat_qcp-hard/features.txt" % data_dir,
+       "features": "%s/yalsat_qcp-hard/features.txt" % distnet_data_dir,
        "domain": "sat",
        "use": ('SAT',),
        "cutoff": 5000},
      "spear_swgcp":
       {"scen": "spear_smallworlds",
-       "features": "%s/spear_smallworlds/features.txt" % data_dir,
+       "features": "%s/spear_smallworlds/features.txt" % distnet_data_dir,
        "domain": "sat",
        "use": ('SAT',),
        "cutoff": 5000},
      "yalsat_swgcp":
       {"scen": "yalsat_smallworlds",
-       "features": "%s/yalsat_smallworlds/features.txt" % data_dir,
+       "features": "%s/yalsat_smallworlds/features.txt" % distnet_data_dir,
        "domain": "sat",
        "use": ('SAT',),
        "cutoff": 5000},
       "lpg-zeno":
        {"scen": "lpg-zenotravel",
-        "features": "%s/lpg-zenotravel/features.txt" % data_dir,
+        "features": "%s/lpg-zenotravel/features.txt" % distnet_data_dir,
         "domain": "planning",
         "use": ('SAT', ),
         "cutoff": 300}

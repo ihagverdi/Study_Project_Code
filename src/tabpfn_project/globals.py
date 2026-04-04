@@ -14,7 +14,7 @@ DISTNET_SCENARIOS = [
     "lpg-zeno",
 ]
 
-MODELS = ["tabpfn", "distnet"]
+MODELS = ["tabpfn", "distnet", "ngboost", "qrf"]
 
 TARGET_SCALES = ["log", "z-score", "max"]
 
@@ -22,6 +22,8 @@ DISTNET_CONTEXT_SIZES = [2**i for i in range(5, 18)]  # context sizes to evaluat
 DISTNET_DROP_RATES = [0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
 DISTNET_CONTEXT_SEEDS = [j*100 for j in range(1,6)]
 DISTNET_DROP_SEEDS = [k*1000 for k in range(1,6)]
+
+MIN_CLAMP_LLH = -200.0  # ~= np.log(1e-87), to prevent numerical issues in log-space. 
 
 
 '''------------------------------------------------------'''

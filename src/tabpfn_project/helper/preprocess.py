@@ -132,7 +132,8 @@ def preprocess_features(tra_X, *arrays, scal="meanstd"):
     additional arrays (validation, test, etc).
     :returns: tuple of processed arrays, with training data first
     """
-
+    tra_X = tra_X.copy()  # avoid modifying original data in-place
+    
     if scal == "minmax":
         # Calculate scaling parameters from training data
         min_, max_ = det_transformation(tra_X)
