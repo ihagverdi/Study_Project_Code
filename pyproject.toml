@@ -33,3 +33,6 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch" }
 torchvision = { index = "pytorch" }
+tabpfn = { git = "https://github.com/ihagverdi/TabPFN.git", branch = "v6.4.1-modified" }
+scikit-learn = { git = "https://github.com/ihagverdi/scikit-learn.git", branch = "scikit-learn-1.8.0-modified" }
+

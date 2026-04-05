@@ -23,7 +23,6 @@ def remove_timeouts(runningtimes, cutoff, features=None, sat_ls=None):
           (len(features) - len(new_ft), len(features)))
     return np.array(new_rt), np.array(new_ft), new_sl
 
-
 def remove_instances_with_status(runningtimes, features, sat_ls=None,
                                  status="CRASHED"):
     if sat_ls is None:
@@ -42,7 +41,6 @@ def remove_instances_with_status(runningtimes, features, sat_ls=None,
           (len(features) - len(new_ft), len(features), status))
     return np.array(new_rt), np.array(new_ft), new_sl
 
-
 def remove_constant_instances(runningtimes, features, sat_ls=None):
     if sat_ls is None:
         sat_ls = [0] * runningtimes.shape[0]
@@ -60,7 +58,6 @@ def remove_constant_instances(runningtimes, features, sat_ls=None):
           (len(features) - len(new_ft), len(features)))
     return np.array(new_rt), np.array(new_ft), new_sl
 
-
 def feature_imputation(features, impute_val=-512, impute_with="median"):
     cntr = 0
     if impute_with == "median":
@@ -70,7 +67,6 @@ def feature_imputation(features, impute_val=-512, impute_with="median"):
             features[:, col] = [med if i == impute_val else i for i in features[:, col]]
     print("Imputed %d values with %s" % (cntr, impute_with))
     return features
-
 
 def remove_zeros(runningtimes, features=None, sat_ls=None):
     """
@@ -94,7 +90,6 @@ def remove_zeros(runningtimes, features=None, sat_ls=None):
     print("Discarding %d (%d) instances because of ZEROS" % (len(features) - len(new_ft), len(features)))
     return np.array(new_rt), np.array(new_ft), new_sl
 
-
 def det_constant_features(X):
     """
     Return a list with constant features
@@ -109,7 +104,6 @@ def det_constant_features(X):
     print(f"Discarding {det_idx[0].shape[0]} features (out of {X.shape[1]})")
     return det_idx
 
-
 def det_transformation(X):
     """
     Return min max scaling
@@ -117,7 +111,6 @@ def det_transformation(X):
     min_ = np.min(X, axis=0)
     max_ = np.max(X, axis=0) - min_
     return min_, max_
-
 
 def delete_constant_features(tra_X, *arrays):
     # Remove constant features

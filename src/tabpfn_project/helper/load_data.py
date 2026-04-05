@@ -34,7 +34,6 @@ def read_results(data_dir, cutoff=300, runs_per_inst=100, suffix="train"):
     data = np.array(data)
     return data, inst_ls, sat_data
 
-
 def load_features(fl_name):
     feat_dict = dict()
     with open(fl_name) as fh:

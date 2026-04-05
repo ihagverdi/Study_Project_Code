@@ -1,22 +1,17 @@
 ''' DISNET global variables and constants '''
 '''------------------------------------------------------'''
+from tabpfn_project.helper.data_source_release import get_sc_dict
+from tabpfn_project.paths import DISTNET_DATA_DIR
+
 RANDOM_STATE=0  # random state for data splitting, model initialization.
 N_FOLDS = 10
 N_GRID_POINTS = 15000
 
-DISTNET_SCENARIOS = [
-    "clasp_factoring",
-    "saps-CVVAR",
-    "spear_qcp",
-    "yalsat_qcp",
-    "spear_swgcp",
-    "yalsat_swgcp",
-    "lpg-zeno",
-]
+DISTNET_SCENARIOS = get_sc_dict(DISTNET_DATA_DIR).keys()
 
-MODELS = ["tabpfn", "distnet", "ngboost", "qrf"]
-
-TARGET_SCALES = ["log", "z-score", "max"]
+MODELS = ["distnet", "tabpfn", "random_forest", "dist_lognormal"]
+TARGET_SCALES = ["log", "max", "original"]
+SUBSAMPLE_METHOD_CHOICES = ["flatten-random"]
 
 DISTNET_CONTEXT_SIZES = [2**i for i in range(5, 18)]  # context sizes to evaluate on, from 32 to 131072.
 DISTNET_DROP_RATES = [0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
