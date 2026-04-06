@@ -100,7 +100,7 @@ def det_constant_features(X):
     min_ = X.min(axis=0)
     diff = max_ - min_
 
-    det_idx = np.where(diff <= 10e-10)
+    det_idx = np.where(diff <= 1e-9)
     print(f"Discarding {det_idx[0].shape[0]} features (out of {X.shape[1]})")
     return det_idx
 

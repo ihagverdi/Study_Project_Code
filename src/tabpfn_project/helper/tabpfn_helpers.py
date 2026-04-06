@@ -1,5 +1,9 @@
+from typing import Any, Dict, List
+
 import torch
 import numpy as np
+
+from tabpfn_project.helper.utils import dict_to_cpu
 
 def ignore_init(y: torch.Tensor, borders: torch.Tensor) -> torch.Tensor:
         ignore_loss_mask = torch.isnan(y)
@@ -140,41 +144,67 @@ def cdf_tabpfn(logits: torch.Tensor, y: torch.Tensor, borders: torch.Tensor) -> 
     total_prob_ys = prob_left_of_bucket + prob_in_bucket
     return total_prob_ys.clip(0.0, 1.0)
 
-def batch_predict_tabpfn(model, X_test, validation_batch_size):
-    '''
-    Batch predictor for tabpfn model.
+def batch_predict_tabpfn(
+    model: Any, 
+    X_test: np.ndarray, 
+    validation_batch_size: int
+) -> List[Dict[str, Any]]:
+    """
+    Batch predictor for TabPFN model to prevent VRAM overflow.
 
-    Parameters:
-    - model: The tabPFN model with a predict method.
-    - X_test: Validation input data (B, D).
-    - validation_batch_size: Batch size for processing validation data.
+    Args:
+        model: The TabPFN model instance.
+        X_test: Input features for testing, shape (B, D).
+        validation_batch_size: Number of instances to process per batch.
     
     Returns:
-    - tabpfn_preds (list of dicts).
-    '''
-    assert validation_batch_size > 0, "validation_batch_size must be a positive integer"
-    from tabpfn_project.helper.utils import dict_to_cpu
+        A list of dictionaries containing model predictions moved to CPU.
+    """
+    if validation_batch_size <= 0:
+        raise ValueError("validation_batch_size must be a positive integer")
 
-    n_validation_instances = X_test.shape[0]  # total number of validation instances
-    validation_batch_size = min(validation_batch_size, n_validation_instances)
+    n_instances = X_test.shape[0]
     tabpfn_preds = []
-    for start in range(0, n_validation_instances, validation_batch_size):
-        X_batch = X_test[start: start + validation_batch_size]
-        with torch.no_grad():
+
+    # Use torch.inference_mode() as it is slightly faster than no_grad() for predictions
+    with torch.inference_mode():
+        for start in range(0, n_instances, validation_batch_size):
+            X_batch = X_test[start : start + validation_batch_size]
+            
+            # Generate predictions with full distribution output
             preds = model.predict(X_batch, output_type="full")
+            
+            # Move tensors to CPU immediately to prevent GPU memory accumulation
             tabpfn_preds.append(dict_to_cpu(preds))
             
     return tabpfn_preds
 
-def oracle_predict_tabpfn(model, y_test_scaled):
-    from tabpfn_project.helper.utils import dict_to_cpu
+def oracle_predict_tabpfn(
+    model: Any, 
+    y_test_scaled: np.ndarray
+) -> List[Dict[str, Any]]:
+    """
+    Oracle predictor: Fits the model on the ground truth targets of each 
+    individual instance and predicts for that instance.
 
+    Args:
+        model: The TabPFN model instance.
+        y_test_scaled: Scaled targets, shape (B, O).
+    
+    Returns:
+        A list of dictionaries containing oracle predictions moved to CPU.
+    """
     tabpfn_preds = []
+
     for prob_inst in y_test_scaled:
-        X_temp = np.zeros(shape=(prob_inst.shape[0], 1))
+        # Create dummy features (zeros) for the current instance
+        X_temp = np.zeros((prob_inst.shape[0], 1))
+        
+        # Fit the model specifically on the targets for this instance
         model.fit(X_temp, prob_inst)
 
-        with torch.no_grad():
+        with torch.inference_mode():
+            # Predict using the first dummy feature entry as the representative for this instance
             preds = model.predict(X_temp[0:1], output_type="full")
             tabpfn_preds.append(dict_to_cpu(preds))
     
