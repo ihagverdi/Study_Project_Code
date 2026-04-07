@@ -41,7 +41,7 @@ def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.
     # 5. Feature Dropping / Agnostic mode
     drop_rate = 1.0 if cfg.feature_agnostic else cfg.feature_drop_rate
     if drop_rate and drop_rate > 0.0:
-        seed = -1 if cfg.feature_agnostic else cfg.seed_feature_drop_rate
+        seed = -1 if (cfg.feature_agnostic or drop_rate == 1.0) else cfg.seed_feature_drop_rate
         X_train_flat, X_test = subsample_features(X_train_flat, X_test, drop_rate=drop_rate, seed=seed)
 
     return X_train_flat, X_test, y_train_flat, y_test, instance_ids_flat

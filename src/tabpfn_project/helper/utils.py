@@ -356,6 +356,10 @@ def fetch_save_dict(
         predict_time = model_specific_info.get("predict_time")
         gpu_metrics = model_specific_info.get("mem_time_stats")
         hpo_time = results_dict.get("hpo_time")
+        y_scale = model_specific_info.get("y_scale")
+        best_epoch = model_specific_info.get("best_epoch")
+
+
 
         temp = {
             "scenario": results_dict.get("scenario"),
@@ -375,6 +379,8 @@ def fetch_save_dict(
             "hpo_time": hpo_time,
             "gpu_metrics": gpu_metrics,
             "use_cpu": results_dict.get("use_cpu"),
+            "y_scale": y_scale,
+            "best_epoch": best_epoch
         }
 
         experiment_results_lst.append(temp)
