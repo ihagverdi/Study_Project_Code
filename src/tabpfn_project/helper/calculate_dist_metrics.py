@@ -247,7 +247,7 @@ def calculate_all_distribution_metrics_randomForest_logspace(
     all_w1, all_ks, all_crps = _integrate_distribution_metrics(z_grid, F_emp, F_model, z_test_orig, device)
 
     llh = dist.log_prob(z_test_orig).clamp(min=MIN_CLAMP_LLH)
-    jacobian = -torch.log(torch.max(z_test_orig, dim=1)[0])
-    all_nllh = -llh.mean(dim=1) + jacobian
+    bias = -torch.log(torch.max(z_test_orig, dim=1)[0])
+    all_nllh = -llh.mean(dim=1) + bias
 
     return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks)

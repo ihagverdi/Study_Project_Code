@@ -5,7 +5,6 @@ import time
 import numpy as np
 import torch
 from typing import Dict
-from sklearn.model_selection import KFold, train_test_split
 
 # Project imports
 from tabpfn_project.experiment_config import ExperimentConfig
@@ -62,8 +61,7 @@ class DistNetHandler(BaseModelHandler):
         assert instance_ids is not None, "instance_ids must be provided to prevent data leakage."
         
         N = X_train.shape[0]
-        E_final, y_scale = None, None
-        
+        best_epoch, y_scale = None, None
         # Early Stopping Logic
         if cfg.early_stopping:
             gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=RANDOM_STATE)
@@ -73,14 +71,14 @@ class DistNetHandler(BaseModelHandler):
             y_tr, y_val = y_train[tr_idx], y_train[val_idx]
             
             X_tr, X_val, X_test = preprocess_features(X_tr, X_val, X_test, scal="meanstd")
-            y_tr, y_val, y_test, y_scale = max_scaling(y_tr, y_val, y_test)
+            y_tr, y_val, y_scale = max_scaling(y_tr, y_val)
             model = DistNetModel(n_input_features=X_tr.shape[1], n_epochs=cfg.n_epochs, batch_size=cfg.batch_size, 
                                  wc_time_limit=cfg.wc_time_limit, X_valid=X_val, y_valid=y_val, 
                                  early_stopping=True, early_stopping_patience=50, random_state=RANDOM_STATE)
             X_train, y_train = X_tr, y_tr
         else:
             X_train, X_test = preprocess_features(X_train, X_test, scal="meanstd")
-            y_train, y_test, y_scale = max_scaling(y_train, y_test)
+            y_train, y_scale = max_scaling(y_train)
             model = DistNetModel(n_input_features=X_train.shape[1], n_epochs=cfg.n_epochs, batch_size=cfg.batch_size, 
                                  wc_time_limit=cfg.wc_time_limit, early_stopping=False, random_state=RANDOM_STATE)
 
