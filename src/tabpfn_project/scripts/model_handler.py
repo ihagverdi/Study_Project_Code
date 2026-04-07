@@ -49,28 +49,29 @@ def track_gpu_memory_and_time(device_input):
         stats["spike_mb"] = (peak_mem_bytes - baseline_mem_bytes) / (1024 ** 2)
 
 class BaseModelHandler:
-    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray) -> Dict:
+    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray) -> Dict:
         raise NotImplementedError
 
 class DistNetHandler(BaseModelHandler):
-    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray):
+    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
         from tabpfn_project.helper.distnet_lognormal import DistNetModel
         from tabpfn_project.helper.calculate_dist_metrics import calculate_all_distribution_metrics_distnet_logspace
+        from sklearn.model_selection import GroupShuffleSplit
         
         assert cfg.target_scale == 'max', "DistNet only supports 'max' scaling."
+        assert instance_ids is not None, "instance_ids must be provided to prevent data leakage."
         
         N = X_train.shape[0]
         E_final, y_scale = None, None
         
         # Early Stopping Logic
-        if cfg.early_stopping and N < 512:
-            E_final = self._run_cv_for_epochs(X_train, y_train)
-            X_train, X_test = preprocess_features(X_train, X_test, scal="meanstd")
-            y_train, y_test, y_scale = max_scaling(y_train, y_test)
-            model = DistNetModel(n_input_features=X_train.shape[1], n_epochs=E_final, batch_size=cfg.batch_size, 
-                                 wc_time_limit=cfg.wc_time_limit, early_stopping=False, random_state=RANDOM_STATE)
-        elif cfg.early_stopping and N >= 512:
-            X_tr, X_val, y_tr, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=RANDOM_STATE)
+        if cfg.early_stopping:
+            gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=RANDOM_STATE)
+            tr_idx, val_idx = next(gss.split(X_train, y_train, groups=instance_ids))
+            
+            X_tr, X_val = X_train[tr_idx], X_train[val_idx]
+            y_tr, y_val = y_train[tr_idx], y_train[val_idx]
+            
             X_tr, X_val, X_test = preprocess_features(X_tr, X_val, X_test, scal="meanstd")
             y_tr, y_val, y_test, y_scale = max_scaling(y_tr, y_val, y_test)
             model = DistNetModel(n_input_features=X_tr.shape[1], n_epochs=cfg.n_epochs, batch_size=cfg.batch_size, 
@@ -87,7 +88,7 @@ class DistNetHandler(BaseModelHandler):
         model.train(X_train, y_train)
         fit_time = time.perf_counter() - fit_start
         
-        if cfg.early_stopping and N >= 512: E_final = model.best_epoch
+        if cfg.early_stopping: best_epoch = model.best_epoch
 
         pred_start = time.perf_counter()
         y_pred = model.predict(X_test)
@@ -101,29 +102,13 @@ class DistNetHandler(BaseModelHandler):
             'y_test_preds': y_pred,
             'result_metrics': {'metrics_summary': metrics_sum, 'instance_summary': inst_sum},
             'model_specific_info': {
-                'model_config': model.model.state_dict(), 'E_final': E_final, 'fit_time': fit_time, 
+                'model_config': model.model.state_dict(), 'best_epoch': best_epoch, 'fit_time': fit_time, 
                 'predict_time': pred_time, 'y_scale': y_scale, 'n_epochs': cfg.n_epochs
             }
         }
 
-    def _run_cv_for_epochs(self, X, y):
-        from tabpfn_project.helper.distnet_lognormal import DistNetModel
-        kf = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
-        best_epochs = []
-        for tr_idx, val_idx in kf.split(X):
-            X_tr, X_val = X[tr_idx], X[val_idx]
-            y_tr, y_val = y[tr_idx], y[val_idx]
-            X_tr, X_val = preprocess_features(X_tr, X_val, scal="meanstd")
-            y_tr, y_val, _ = max_scaling(y_tr, y_val)
-            m = DistNetModel(n_input_features=X_tr.shape[1], n_epochs=1000, batch_size=16, 
-                             wc_time_limit=3540, X_valid=X_val, y_valid=y_val, 
-                             early_stopping=True, early_stopping_patience=50, random_state=RANDOM_STATE)
-            m.train(X_tr, y_tr)
-            best_epochs.append(m.best_epoch)
-        return int(round(np.mean(best_epochs)))
-
 class TabPFNHandler(BaseModelHandler):
-    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray):
+    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
         from tabpfn import TabPFNRegressor
         from tabpfn_project.helper.tabpfn_helpers import batch_predict_tabpfn, oracle_predict_tabpfn
         from tabpfn_project.helper.calculate_dist_metrics import calculate_all_distribution_metrics_tabpfn_logspace
@@ -170,7 +155,7 @@ class TabPFNHandler(BaseModelHandler):
             pickle.dump(preds, f)
 
 class RFHandler(BaseModelHandler):
-    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray):
+    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
         from tabpfn_project.helper.random_forest import RuntimePredictionRandomForest
         from tabpfn_project.helper.calculate_dist_metrics import calculate_all_distribution_metrics_randomForest_logspace
 
@@ -199,7 +184,7 @@ class RFHandler(BaseModelHandler):
         }
 
 class LognormalHandler(BaseModelHandler):
-    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray):
+    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
         from tabpfn_project.helper.calculate_dist_metrics import calculate_all_distribution_metrics_logNormalDist_logspace
         device = torch.device('cuda' if (torch.cuda.is_available() and not cfg.use_cpu) else 'cpu')
 

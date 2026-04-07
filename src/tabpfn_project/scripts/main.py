@@ -19,7 +19,7 @@ def train_test_model(cfg: ExperimentConfig):
     save_dir.mkdir(parents=True, exist_ok=True)
 
     # 2. Data Pipeline
-    X_train, X_test, y_train, y_test = prepare_datasets(cfg)
+    X_train, X_test, y_train, y_test, instance_ids = prepare_datasets(cfg)
 
     # 3. Model Execution
     handlers = {
@@ -33,7 +33,7 @@ def train_test_model(cfg: ExperimentConfig):
         raise ValueError(f"Unsupported model: {cfg.model_name}")
     
     handler = handlers[cfg.model_name]
-    model_results = handler.run(cfg, X_train, X_test, y_train, y_test)
+    model_results = handler.run(cfg, X_train, X_test, y_train, y_test, instance_ids)
 
     # 4. Standardize Results Dictionary
     results_dict = {

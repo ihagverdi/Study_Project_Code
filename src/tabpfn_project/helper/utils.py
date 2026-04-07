@@ -208,29 +208,37 @@ def load_pickle(path, access_mode='rb'):
             results_dict = pickle.load(f)
     return results_dict
 
-def subsample_flattened_data(X_train_flat, y_train_flat, context_size, seed, subsample_method):
+def subsample_flattened_data(*arrays, context_size, seed, subsample_method):
     """
     Subsamples the flattened dataset. Currently supports 'flatten-random' which randomly samples from the flattened training data.
     
     Args:
-        X_train_flat: (n_instances, n_features)
-        y_train_flat: (n_instances, 1)
-        context_size: Total number of (X, y) pairs to return.
+        *arrays: Any number of numpy arrays (e.g., X_train_flat, y_train_flat, instance_ids_flat). 
+                 All must have the same length in the first dimension.
+        context_size: Total number of items to return.
         seed: Random seed for reproducibility.
         subsample_method: Strategy for sampling ('flatten-random')
         
     Returns:
-        X_out: (context_size, n_features)
-        y_out: (context_size, 1)
+        Tuple of subsampled arrays corresponding to the inputs.
     """
+    if not arrays:
+        raise ValueError("At least one array must be provided.")
+        
+    n_samples = arrays[0].shape[0]
+    
+    # Assert all arrays have the same number of instances
+    assert all(arr.shape[0] == n_samples for arr in arrays), \
+        "All arrays must have the same number of instances (shape[0])."
+    
     rng = np.random.default_rng(seed)
-    n_samples = X_train_flat.shape[0]
     
     if subsample_method == 'flatten-random':
         selected_indices = rng.choice(n_samples, size=context_size, replace=True)
-        X_out = X_train_flat[selected_indices]
-        y_out = y_train_flat[selected_indices]
-        return X_out, y_out
+        # Apply the selected indices to all provided arrays
+        return tuple(arr[selected_indices] for arr in arrays)
+    else:
+        raise ValueError(f"Unknown subsample_method: {subsample_method}")
 
 def subsample_features(X_train, *arrays, drop_rate, seed):
     """
@@ -295,8 +303,19 @@ def load_tabpfn_preds(cfg, tabpfn_preds_dir):
             return WindowsPathUnpickler(f).load()
         return pickle.load(f)
 
-def fetch_save_dict(results_dir: pathlib.Path, metadata_dir: pathlib.Path, model_name: str, search_key: str, search_value: str, scenario: str = None) -> None:
-    """Build and save a nested results dictionary filtered by model and scenario."""
+def fetch_save_dict(
+    results_dir: pathlib.Path,
+    metadata_dir: pathlib.Path,
+    model_save_name: str,
+    model_name: str,
+    search_key: str = None,
+    search_value=None,
+    scenario: str = None,
+) -> None:
+    """
+    Build and save a normalized list of experiment results filtered by model/scenario
+    and optional key/value filter.
+    """
     experiment_results_lst = []
 
     for fpath in sorted(metadata_dir.glob("*.pkl")):
@@ -306,66 +325,67 @@ def fetch_save_dict(results_dir: pathlib.Path, metadata_dir: pathlib.Path, model
             else:
                 results_dict = pickle.load(f)
 
-        if scenario is not None and results_dict.get("scenario") != scenario:
-            continue
-        if results_dict.get(search_key) != search_value:
+        saved_model = results_dict.get("model_name")
+        if saved_model != model_name:
             continue
 
-        context_size = results_dict["context_size"]
+        # Optional scenario filter
+        if scenario is not None and results_dict.get("scenario") != scenario:
+            continue
+
+        # Optional arbitrary key-value filter
+        if search_key is not None and results_dict.get(search_key) != search_value:
+            continue
+
+        context_size = results_dict.get("context_size")
         if context_size in {2**13 + 2000, 2**13 + 4000}:
             continue
 
-        metrics_summary = None
-        instance_summary = None
-        best_params = None
-        y_preds = None
-        fit_time = None
-        predict_time = None
-        gpu_metrics = None
-        hpo_time = None
+        result_metrics = results_dict.get("result_metrics", {})
+        model_specific_info = results_dict.get("model_specific_info", {})
 
+        metrics_summary = result_metrics.get("metrics_summary")
+        instance_summary = result_metrics.get("instance_summary")
+        y_preds = results_dict.get("y_test_preds")
 
-        if model_name == "baseline":
-            metrics_summary = results_dict['test_preds'][0]
-            instance_summary = results_dict['test_preds'][1]
+        # Keep legacy field names expected by notebook code
+        best_params = results_dict.get("best_params")
 
-        elif model_name == "rf_baseline":
-            metrics_summary = results_dict['result_metrics']['metrics_summary']
-            instance_summary = results_dict['result_metrics']['instance_summary']
-            best_params = results_dict['best_params']
-            y_preds = results_dict['test_preds']  # [rf_means, rf_variances]
-            fit_time = results_dict['result_metrics']['fit_time']
-            predict_time = results_dict['result_metrics']['predict_time']
-            hpo_time = results_dict['result_metrics']['hpo_time']
-
-        elif model_name == "tabpfn":
-            gpu_metrics = results_dict['result_metrics']['mem_time_stats']
-            metrics_summary = results_dict['result_metrics']['metrics_summary']
-            instance_summary = results_dict['result_metrics']['instance_summary']
+        # Times are model-specific in current schema
+        fit_time = model_specific_info.get("fit_time")
+        predict_time = model_specific_info.get("predict_time")
+        gpu_metrics = model_specific_info.get("mem_time_stats")
+        hpo_time = results_dict.get("hpo_time")
 
         temp = {
-            "scenario": results_dict["scenario"],
-            "model": results_dict["model_name"],
-            "context_size": results_dict["context_size"],
-            "fold": results_dict["fold"],
-            "context_seed": results_dict["seed_context"],
+            "scenario": results_dict.get("scenario"),
+            "model": model_save_name,
+            "context_size": context_size,
+            "fold": results_dict.get("fold"),
+            "context_seed": results_dict.get("seed_context_size", results_dict.get("seed_context")),
+            "feature_drop_rate": results_dict.get("feature_drop_rate"),
+            "seed_feature_drop_rate": results_dict.get("seed_feature_drop_rate", results_dict.get("seed_features")),
             "metrics_summary": metrics_summary,
             "instance_summary": instance_summary,
             "best_params": best_params,
             "y_preds": y_preds,
-            "target_scale": results_dict["target_scale"],
+            "target_scale": results_dict.get("target_scale"),
             "fit_time": fit_time,
             "predict_time": predict_time,
             "hpo_time": hpo_time,
             "gpu_metrics": gpu_metrics,
-            "use_cpu": results_dict["use_cpu"],
+            "use_cpu": results_dict.get("use_cpu"),
         }
 
         experiment_results_lst.append(temp)
 
-    if scenario is None:
-        scenario = "all_scenarios"
-    save_file_path = results_dir / f"{model_name}_{search_key}_{search_value}_{scenario}.pkl"
+    scenario_label = scenario if scenario is not None else "all_scenarios"
+    if search_key is None:
+        save_name = f"{model_save_name}_{scenario_label}.pkl"
+    else:
+        save_name = f"{model_save_name}_{search_key}_{search_value}_{scenario_label}.pkl"
+
+    save_file_path = results_dir / save_name
     with open(save_file_path, "wb") as f:
         pickle.dump(experiment_results_lst, f)
 

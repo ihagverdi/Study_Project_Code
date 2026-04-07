@@ -14,7 +14,6 @@ dependencies = [
     "matplotlib>=3.10.8",
     "quantile-forest>=1.4.1",
     "swig>=4.4.1",
-    "smac>=2.3.1",
     "configspace>=1.2.2",
     "statsmodels>=0.14.6",
     "pytest>=9.0.2",

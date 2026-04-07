@@ -137,6 +137,10 @@ class DistNetModel:
             indices = torch.randperm(n_samples, device=self.device)
             for start in range(0, n_samples, self.batch_size):
                 idx = indices[start : (start + self.batch_size)]
+
+                if len(idx) == 1:
+                    continue  # Skip batches of size 1
+                
                 bx, by = X[idx], y[idx]
                 self.optimizer.zero_grad()
                 preds = self.model(bx)

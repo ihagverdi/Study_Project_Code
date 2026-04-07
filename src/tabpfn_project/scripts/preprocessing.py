@@ -9,9 +9,11 @@ from tabpfn_project.helper.utils import subsample_features, subsample_flattened_
 from tabpfn_project.paths import DISTNET_DATA_DIR
 
 
-def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Handles loading, flattening, and feature subsampling."""
     X_train, X_test, y_train, y_test = load_distnet_data(DISTNET_DATA_DIR, cfg.scenario, cfg.fold, return_all=False)
+
+    instance_ids = np.arange(X_train.shape[0])
 
     # 1. Target Subsampling
     if cfg.num_samples_per_instance != 100:
@@ -23,11 +25,13 @@ def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.
     X_train_flat = np.repeat(X_train, repeats=cfg.num_samples_per_instance, axis=0)
     y_train_flat = y_train.reshape(-1, 1)
 
+    instance_ids_flat = np.repeat(instance_ids, repeats=cfg.num_samples_per_instance)
+
     # 3. Context Subsampling
     if cfg.context_size is not None:
         assert cfg.seed_context_size is not None
-        X_train_flat, y_train_flat = subsample_flattened_data(
-            X_train_flat, y_train_flat, context_size=cfg.context_size, 
+        X_train_flat, y_train_flat, instance_ids_flat = subsample_flattened_data(
+            X_train_flat, y_train_flat, instance_ids_flat, context_size=cfg.context_size, 
             seed=cfg.seed_context_size, subsample_method=cfg.subsample_method
         )
     
@@ -40,4 +44,4 @@ def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.
         seed = -1 if cfg.feature_agnostic else cfg.seed_feature_drop_rate
         X_train_flat, X_test = subsample_features(X_train_flat, X_test, drop_rate=drop_rate, seed=seed)
 
-    return X_train_flat, X_test, y_train_flat, y_test
+    return X_train_flat, X_test, y_train_flat, y_test, instance_ids_flat
