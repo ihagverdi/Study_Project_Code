@@ -13,7 +13,7 @@ from tabpfn_project.globals import (
     N_GRID_POINTS, RANDOM_STATE, 
 )
 from tabpfn_project.helper.utils import generate_experiment_id
-from tabpfn_project.helper.y_scalers import max_scaling, log_scaling
+from tabpfn_project.helper.y_scalers import max_scaling, log1p_scaling
 from tabpfn_project.paths import RESULTS_DIR
 
 @contextlib.contextmanager
@@ -54,12 +54,13 @@ class BaseModelHandler:
 class DistNetHandler(BaseModelHandler):
     def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
         from tabpfn_project.helper.distnet_lognormal import DistNetModel
-        from tabpfn_project.helper.calculate_dist_metrics import calculate_all_distribution_metrics_distnet_logspace
+        from tabpfn_project.helper.calculate_metrics import calculate_metrics_distnet
         from sklearn.model_selection import GroupShuffleSplit
         
-        assert cfg.target_scale == 'max', "DistNet only supports 'max' scaling."
+        assert cfg.target_scale in ['max'], "Invalid target_scale for DistNet. Only 'max' is supported to ensure proper scaling of the distribution outputs."
         assert instance_ids is not None, "instance_ids must be provided to prevent data leakage."
-        
+
+        device = torch.device('cuda' if (torch.cuda.is_available() and not cfg.use_cpu) else 'cpu')
         N = X_train.shape[0]
         best_epoch, y_scale = None, None
         # Early Stopping Logic
@@ -92,8 +93,8 @@ class DistNetHandler(BaseModelHandler):
         y_pred = model.predict(X_test)
         pred_time = time.perf_counter() - pred_start
 
-        metrics_sum, inst_sum = calculate_all_distribution_metrics_distnet_logspace(
-            y_test, y_pred, device=torch.device('cpu'), target_scale=cfg.target_scale, y_scaler=y_scale, N_grid_points=N_GRID_POINTS
+        metrics_sum, inst_sum = calculate_metrics_distnet(
+            y_test, y_pred, device=device, target_scale=cfg.target_scale, y_scaler=y_scale, N_grid_points=N_GRID_POINTS
         )
 
         return {
@@ -109,14 +110,15 @@ class TabPFNHandler(BaseModelHandler):
     def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
         from tabpfn import TabPFNRegressor
         from tabpfn_project.helper.tabpfn_helpers import batch_predict_tabpfn, oracle_predict_tabpfn
-        from tabpfn_project.helper.calculate_dist_metrics import calculate_all_distribution_metrics_tabpfn_logspace
+        from tabpfn_project.helper.calculate_metrics import calculate_metrics_tabpfn
+        from tabpfn.constants import ModelVersion
 
         assert cfg.target_scale in ['log', 'original']
-        y_train_scaled, y_test_scaled = (log_scaling(y_train, y_test) if cfg.target_scale == 'log' else (y_train, y_test))
+        y_train_scaled = (log1p_scaling(y_train)[0] if cfg.target_scale == 'log' else y_train)
         
         device = torch.device('cuda' if (torch.cuda.is_available() and not cfg.use_cpu) else 'cpu')
-        model = TabPFNRegressor(device=device, random_state=RANDOM_STATE, ignore_pretraining_limits=True)
-        
+        model = TabPFNRegressor.create_default_for_version(ModelVersion.V2_5, ignore_pretraining_limits=True, device=device, random_state=RANDOM_STATE)
+
         mem_stats = {"fit": {}, "predict": {}}
         
         if not cfg.oracle:
@@ -127,10 +129,10 @@ class TabPFNHandler(BaseModelHandler):
                 preds = batch_predict_tabpfn(model, X_test, validation_batch_size=cfg.val_batch_size)
         else:
             with track_gpu_memory_and_time(device) as stats:
-                preds = oracle_predict_tabpfn(model, y_test_scaled)
+                preds = oracle_predict_tabpfn(model, y_test, target_scale=cfg.target_scale)
 
         mem_stats["predict"] = stats
-        metrics_sum, inst_sum = calculate_all_distribution_metrics_tabpfn_logspace(
+        metrics_sum, inst_sum = calculate_metrics_tabpfn(
             y_test, preds, device=device, target_scale=cfg.target_scale, N_grid_points=N_GRID_POINTS
         )
 
@@ -155,13 +157,15 @@ class TabPFNHandler(BaseModelHandler):
 class RFHandler(BaseModelHandler):
     def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
         from tabpfn_project.helper.random_forest import RuntimePredictionRandomForest
-        from tabpfn_project.helper.calculate_dist_metrics import calculate_all_distribution_metrics_randomForest_logspace
+        from tabpfn_project.helper.calculate_metrics import calculate_metrics_random_forest
+        device = torch.device("cuda" if (torch.cuda.is_available() and not cfg.use_cpu) else "cpu")
 
         X_train, X_test = preprocess_features(X_train, X_test, scal="meanstd")
         assert cfg.target_scale == 'log'
-        y_train_scaled = log_scaling(y_train)[0]
+        y_train_scaled = log1p_scaling(y_train)[0]
         
         model = RuntimePredictionRandomForest(random_state=RANDOM_STATE)
+
         start = time.perf_counter()
         model.fit(X_train, y_train_scaled)
         fit_time = time.perf_counter() - start
@@ -170,9 +174,8 @@ class RFHandler(BaseModelHandler):
         means, vars = model.predict(X_test)
         pred_time = time.perf_counter() - pred_start
 
-        device = torch.device("cuda" if (torch.cuda.is_available() and not cfg.use_cpu) else "cpu")
-        metrics_sum, inst_sum = calculate_all_distribution_metrics_randomForest_logspace(
-            y_test, (means.ravel(), vars.ravel()), device=device, N_grid_points=N_GRID_POINTS
+        metrics_sum, inst_sum = calculate_metrics_random_forest(
+            y_test, (means, vars), device=device, N_grid_points=N_GRID_POINTS
         )
 
         return {
@@ -183,7 +186,7 @@ class RFHandler(BaseModelHandler):
 
 class LognormalHandler(BaseModelHandler):
     def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
-        from tabpfn_project.helper.calculate_dist_metrics import calculate_all_distribution_metrics_logNormalDist_logspace
+        from tabpfn_project.helper.calculate_metrics import calculate_metrics_lognormal
         device = torch.device('cuda' if (torch.cuda.is_available() and not cfg.use_cpu) else 'cpu')
 
         if cfg.oracle:
@@ -196,7 +199,7 @@ class LognormalHandler(BaseModelHandler):
             mu, sigma = torch.mean(log_y), torch.std(log_y)
             
         dist = torch.distributions.LogNormal(loc=mu, scale=sigma)
-        metrics_sum, inst_sum = calculate_all_distribution_metrics_logNormalDist_logspace(y_test, dist, device=device, N_grid_points=N_GRID_POINTS)
+        metrics_sum, inst_sum = calculate_metrics_lognormal(y_test, dist, device=device, N_grid_points=N_GRID_POINTS)
 
         return {
             'y_test_preds': [mu, sigma],

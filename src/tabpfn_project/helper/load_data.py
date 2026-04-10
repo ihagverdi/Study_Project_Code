@@ -1,4 +1,5 @@
 import os
+from typing import Tuple
 import numpy as np
 from sklearn.model_selection import KFold
 from tabpfn_project.globals import N_FOLDS, RANDOM_STATE
@@ -45,7 +46,7 @@ def load_features(fl_name):
             feat_dict[key] = val
     return feat_dict
 
-def load_distnet_data(distnet_data_dir, scenario_name, fold, return_all=False):
+def load_distnet_data(distnet_data_dir, scenario_name, fold) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     loads the data for the specified scenario and fold from the distnet data directory.
     :param distnet_data_dir: the directory where the distnet data is stored
@@ -63,13 +64,10 @@ def load_distnet_data(distnet_data_dir, scenario_name, fold, return_all=False):
         
     features = np.asarray(features)
     runtimes = np.asarray(runtimes)
-
-    if return_all:
-        return features, runtimes
     
     # Get CV splits
     kf = KFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE)
-    splits = list(kf.split(np.arange(runtimes.shape[0])))
+    splits = list(kf.split(np.arange(features.shape[0])))
     train_idx, test_idx = splits[fold]  # process the specified fold
 
     return features[train_idx], features[test_idx], runtimes[train_idx], runtimes[test_idx]

@@ -58,7 +58,7 @@ class DistNetModel:
     ):
         set_seed(random_state)
         self.n_epochs = n_epochs
-        self.expected_n_epochs = 1000
+        self.expected_n_epochs = n_epochs
         self.wc_time_limit = wc_time_limit  # seconds
         self.batch_size = batch_size
         self.device = torch.device('cpu')
@@ -70,9 +70,7 @@ class DistNetModel:
         # validation data - direct device placement
         self.validation_available = (X_valid is not None and y_valid is not None)
         if self.validation_available:
-            assert X_valid.ndim == 2
-            assert y_valid.ndim == 2 and y_valid.shape[-1] == 1
-
+            assert X_valid.ndim == 2 and y_valid.ndim == 2 and y_valid.shape[-1] == 1
             self.X_valid = torch.as_tensor(X_valid, dtype=torch.float32, device=self.device)
             self.y_valid = torch.as_tensor(y_valid, dtype=torch.float32, device=self.device)
 
@@ -125,6 +123,7 @@ class DistNetModel:
     def train(self, X_train, y_train):
         assert X_train.ndim == 2 and y_train.ndim == 2, "X_train and y_train must have batch dimension"
         assert len(X_train) == len(y_train), "X_train and y_train must have same length"
+        assert y_train.shape[1] == 1, "y_train must have shape [batch, 1]"
 
         self.model.train()
         X = torch.as_tensor(X_train, dtype=torch.float32, device=self.device)
@@ -157,7 +156,7 @@ class DistNetModel:
             val_loss = None
             if self.validation_available:
                 self.model.eval()
-                with torch.no_grad():
+                with torch.inference_mode():
                     vpred = self.model(self.X_valid)
                     val_loss = loss_fn(self.y_valid, vpred)
                 # Early stopping check
@@ -198,6 +197,6 @@ class DistNetModel:
 
     def predict(self, X_test):
         self.model.eval()
-        X_t = torch.as_tensor(X_test, dtype=torch.float32, device=self.device)
-        with torch.no_grad():
-            return self.model(X_t).cpu().numpy()
+        X_test_t = torch.as_tensor(X_test, dtype=torch.float32, device=self.device)
+        with torch.inference_mode():
+            return self.model(X_test_t).cpu().numpy()

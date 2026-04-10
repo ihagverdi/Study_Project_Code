@@ -26,7 +26,7 @@ def train_test_model(cfg: ExperimentConfig):
         'distnet': DistNetHandler(),
         'tabpfn': TabPFNHandler(),
         'random_forest': RFHandler(),
-        'dist_lognormal': LognormalHandler()
+        'lognormal': LognormalHandler()
     }
     
     if cfg.model_name not in handlers:

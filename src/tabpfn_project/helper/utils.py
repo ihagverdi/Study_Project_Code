@@ -265,6 +265,10 @@ def subsample_features(X_train, *arrays, drop_rate, seed):
     # 2. Handle standard feature subsampling
     rng = np.random.default_rng(seed=seed)
     n_features = X_train.shape[1]
+
+    assert all(arr.shape[1] == n_features for arr in arrays), (
+        "All input arrays must have the same number of features (shape[1])."
+    )
     
     # Calculate how many features to KEEP. 
     size_features = max(1, int(n_features * (1 - drop_rate)))
@@ -289,8 +293,7 @@ def subsample_targets_per_instance(y_train, num_samples_per_instance, seed_sampl
     """
     rng = np.random.default_rng(seed=seed_samples_per_instance)
     subsample_idx = rng.choice(y_train.shape[1], size=num_samples_per_instance, replace=False)
-    y_train = y_train[:, subsample_idx]
-    return y_train
+    return y_train[:, subsample_idx]
 
 def load_tabpfn_preds(cfg, tabpfn_preds_dir):
     exp_id = generate_experiment_id(cfg)
@@ -308,9 +311,9 @@ def fetch_save_dict(
     metadata_dir: pathlib.Path,
     model_save_name: str,
     model_name: str,
-    search_key: str = None,
+    search_key: str | None = None,
     search_value=None,
-    scenario: str = None,
+    scenario: str | None = None,
 ) -> None:
     """
     Build and save a normalized list of experiment results filtered by model/scenario

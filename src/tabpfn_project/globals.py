@@ -9,7 +9,7 @@ N_GRID_POINTS = 15000
 
 DISTNET_SCENARIOS = get_sc_dict(DISTNET_DATA_DIR).keys()
 
-MODELS = ["distnet", "tabpfn", "random_forest", "dist_lognormal"]
+MODELS = ["distnet", "tabpfn", "random_forest", "lognormal"]
 TARGET_SCALES = ["log", "max", "original"]
 SUBSAMPLE_METHOD_CHOICES = ["flatten-random"]
 
@@ -18,8 +18,7 @@ DISTNET_DROP_RATES = [0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
 DISTNET_CONTEXT_SEEDS = [j*100 for j in range(1,6)]
 DISTNET_DROP_SEEDS = [k*1000 for k in range(1,6)]
 
-MIN_CLAMP_LLH = -200.0  # ~= np.log(1e-87), to prevent numerical issues in log-space. 
-
+MIN_CLAMP_LLH = -200.0  # ~= np.log(1e-87), to prevent numerical issues in log-space.
 
 '''------------------------------------------------------'''
 

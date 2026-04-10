@@ -4,14 +4,14 @@ import numpy as np
 
 from tabpfn_project.experiment_config import ExperimentConfig
 from tabpfn_project.helper.load_data import load_distnet_data
-from tabpfn_project.helper.preprocess import delete_constant_features
+from tabpfn_project.helper.preprocess import del_constant_features
 from tabpfn_project.helper.utils import subsample_features, subsample_flattened_data, subsample_targets_per_instance
 from tabpfn_project.paths import DISTNET_DATA_DIR
 
 
 def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Handles loading, flattening, and feature subsampling."""
-    X_train, X_test, y_train, y_test = load_distnet_data(DISTNET_DATA_DIR, cfg.scenario, cfg.fold, return_all=False)
+    X_train, X_test, y_train, y_test = load_distnet_data(DISTNET_DATA_DIR, cfg.scenario, cfg.fold)
 
     instance_ids = np.arange(X_train.shape[0])
 
@@ -36,7 +36,7 @@ def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.
         )
     
     # 4. Feature Cleaning
-    X_train_flat, X_test = delete_constant_features(X_train_flat, X_test)
+    X_train_flat, X_test = del_constant_features(X_train_flat, X_test)
 
     # 5. Feature Dropping / Agnostic mode
     drop_rate = 1.0 if cfg.feature_agnostic else cfg.feature_drop_rate

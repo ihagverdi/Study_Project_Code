@@ -1264,7 +1264,7 @@ wheels = [
 [[package]]
 name = "scikit-learn"
 version = "1.9.dev0"
-source = { git = "https://github.com/ihagverdi/scikit-learn.git?branch=scikit-learn-1.8.0-modified#d31d963608157fb43fbfe0a0a788a3b1d837901c" }
+source = { git = "https://github.com/ihagverdi/scikit-learn.git?branch=scikit-learn-modified-1.8.0#397d3a807bb070261f409ee96bfd9e436eda0c37" }
 dependencies = [
     { name = "joblib" },
     { name = "numpy" },
@@ -1416,8 +1416,8 @@ wheels = [
 
 [[package]]
 name = "tabpfn"
-version = "6.4.1"
-source = { git = "https://github.com/ihagverdi/TabPFN.git?branch=v6.4.1-modified#343b6b0cf4ac1481c7690a0aa646d75369877d70" }
+version = "7.1.0"
+source = { git = "https://github.com/ihagverdi/TabPFN.git?branch=tabpfn-patched-7.1.0#6ca0f33f4a9ff0d7a84bf7dd8246d93df166e24f" }
 dependencies = [
     { name = "einops" },
     { name = "eval-type-backport" },
@@ -1482,11 +1482,11 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.3.5" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "quantile-forest", specifier = ">=1.4.1" },
-    { name = "scikit-learn", git = "https://github.com/ihagverdi/scikit-learn.git?branch=scikit-learn-1.8.0-modified" },
+    { name = "scikit-learn", git = "https://github.com/ihagverdi/scikit-learn.git?branch=scikit-learn-modified-1.8.0" },
     { name = "scipy", specifier = ">=1.17.0" },
     { name = "statsmodels", specifier = ">=0.14.6" },
     { name = "swig", specifier = ">=4.4.1" },
-    { name = "tabpfn", git = "https://github.com/ihagverdi/TabPFN.git?branch=v6.4.1-modified" },
+    { name = "tabpfn", git = "https://github.com/ihagverdi/TabPFN.git?branch=tabpfn-patched-7.1.0" },
     { name = "torch", specifier = ">=2.10.0", index = "https://download.pytorch.org/whl/cu130" },
     { name = "torchvision", specifier = ">=0.25.0", index = "https://download.pytorch.org/whl/cu130" },
 ]
