@@ -57,11 +57,10 @@ class DistNetHandler(BaseModelHandler):
         from tabpfn_project.helper.calculate_metrics import calculate_metrics_distnet
         from sklearn.model_selection import GroupShuffleSplit
         
-        assert cfg.target_scale in ['max'], "Invalid target_scale for DistNet. Only 'max' is supported to ensure proper scaling of the distribution outputs."
+        assert cfg.target_scale in ['max'], "Invalid target_scale for DistNet. Only 'max' is supported."
         assert instance_ids is not None, "instance_ids must be provided to prevent data leakage."
 
         device = torch.device('cuda' if (torch.cuda.is_available() and not cfg.use_cpu) else 'cpu')
-        N = X_train.shape[0]
         best_epoch, y_scale = None, None
         # Early Stopping Logic
         if cfg.early_stopping:

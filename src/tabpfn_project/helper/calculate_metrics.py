@@ -37,7 +37,7 @@ def calculate_metrics_distnet(
 
     assert F_emp.shape == F_model.shape == (y_test_original.shape[0], N_grid_points), "CDF shapes must match (N_instances, N_grid_points)"
     
-    all_crps, all_w1, all_ks, = _integrate_distribution_metrics(z_grid, F_emp, F_model, z_test_original, device)
+    all_crps, all_w1, all_ks = _integrate_distribution_metrics(z_grid, F_emp, F_model, z_test_original, device)
 
     # 3. NLLH with Jacobian and Bias
     y_test_scaled = y_test_original * y_scaler
@@ -98,7 +98,7 @@ def calculate_metrics_tabpfn(
             F_tab_raw = criterion.cdf(logits=logits, y=torch.expm1(z_grid))
             F_tab = torch.where(z_grid < 0, torch.zeros_like(F_tab_raw), F_tab_raw)
         
-        crps_b, w1_b, ks_b, = _integrate_distribution_metrics(z_grid, F_emp, F_tab, batch_z_original, device)
+        crps_b, w1_b, ks_b = _integrate_distribution_metrics(z_grid, F_emp, F_tab, batch_z_original, device)
         all_w1.append(w1_b.detach().cpu()); all_ks.append(ks_b.detach().cpu()); all_crps.append(crps_b.detach().cpu())
         
         # 3. NLLH
