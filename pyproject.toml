@@ -12,7 +12,6 @@ dependencies = [
     "torch>=2.10.0",
     "torchvision>=0.25.0",
     "matplotlib>=3.10.8",
-    "quantile-forest>=1.4.1",
     "swig>=4.4.1",
     "configspace>=1.2.2",
     "statsmodels>=0.14.6",
