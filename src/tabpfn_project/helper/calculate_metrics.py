@@ -4,25 +4,33 @@ from tabpfn_project.globals import MIN_CLAMP_LLH
 def calculate_metrics_distnet(
     y_test_original, y_preds, *, device, target_scale, y_scaler, N_grid_points,
 ):
-    assert target_scale in ["max"], "target_scale must be 'max' to ensure proper scaling of the distribution outputs for DistNet."
+    assert target_scale in ["max", "log"], "target_scale must be 'max' or 'log'"
 
     y_test_original = torch.as_tensor(y_test_original, dtype=torch.float32, device=device)
-    y_preds = torch.as_tensor(y_preds, dtype=torch.float32, device=device)
-    y_scaler = torch.as_tensor(y_scaler, dtype=torch.float32, device=device)
-
     z_test_original = torch.log1p(y_test_original)
 
-    sigma = y_preds[:, 0].unsqueeze(1)
-    mu = torch.log(y_preds[:, 1]).unsqueeze(1)  
-    dist = torch.distributions.LogNormal(loc=mu, scale=sigma)
+    y_preds = torch.as_tensor(y_preds, dtype=torch.float32, device=device)
+    y_scaler = torch.as_tensor(y_scaler, dtype=torch.float32, device=device) if y_scaler is not None else torch.tensor(1.0, device=device)
+
+    if target_scale == "max":
+        mu = torch.log(y_preds[:, 1]).unsqueeze(1)
+        sigma = y_preds[:, 0].unsqueeze(1)
+        dist = torch.distributions.LogNormal(loc=mu, scale=sigma)
+    else:
+        mu = y_preds[:, 0].unsqueeze(1)
+        sigma = y_preds[:, 1].unsqueeze(1)
+        dist = torch.distributions.Normal(loc=mu, scale=sigma)
 
     # 1. Bounds
     min_z_emp = z_test_original.min(dim=1, keepdim=True)[0]
     max_z_emp = z_test_original.max(dim=1, keepdim=True)[0]
 
     p_min, p_max = torch.tensor(0.0001, device=device), torch.tensor(0.9999, device=device)
-    min_z_model = torch.log1p(dist.icdf(p_min) / y_scaler)
-    max_z_model = torch.log1p(dist.icdf(p_max) / y_scaler)
+
+    if target_scale == "max":
+        min_z_model, max_z_model = torch.log1p(dist.icdf(p_min) / y_scaler), torch.log1p(dist.icdf(p_max) / y_scaler)
+    else:
+        min_z_model, max_z_model = dist.icdf(p_min), dist.icdf(p_max)
 
     # 2. Grid and Integration
     global_start = torch.minimum(min_z_emp, min_z_model)
@@ -33,17 +41,25 @@ def calculate_metrics_distnet(
     
     indicator = (z_test_original.unsqueeze(1) <= z_grid.unsqueeze(2)).float()
     F_emp = indicator.mean(dim=2)  # Empirical CDF at grid points
-    F_model = dist.cdf((torch.expm1(z_grid) * y_scaler).clamp(min=0))
+    
+    if target_scale == "max":
+        F_model = dist.cdf((torch.expm1(z_grid) * y_scaler).clamp(min=0))
+    else:
+        F_model = dist.cdf(z_grid)
 
     assert F_emp.shape == F_model.shape == (y_test_original.shape[0], N_grid_points), "CDF shapes must match (N_instances, N_grid_points)"
     
     all_crps, all_w1, all_ks = _integrate_distribution_metrics(z_grid, F_emp, F_model, z_test_original, device)
 
     # 3. NLLH with Jacobian and Bias
-    y_test_scaled = y_test_original * y_scaler
-    llh = dist.log_prob(y_test_scaled).clamp(min=MIN_CLAMP_LLH)
-    llh += z_test_original  # Jacobian correction
-    bias = -torch.log(torch.max(z_test_original, dim=1)[0]) - torch.log(y_scaler)
+    if target_scale == "max":
+        y_test_scaled = y_test_original * y_scaler
+        llh = dist.log_prob(y_test_scaled).clamp(min=MIN_CLAMP_LLH)
+        llh += z_test_original  # Jacobian correction
+        bias = -torch.log(torch.max(z_test_original, dim=1)[0]) - torch.log(y_scaler)
+    else:
+        llh = dist.log_prob(z_test_original).clamp(min=MIN_CLAMP_LLH)
+        bias = -torch.log(torch.max(z_test_original, dim=1)[0])
 
     all_nllh = -llh.mean(dim=1) + bias
 
@@ -95,8 +111,7 @@ def calculate_metrics_tabpfn(
         if target_scale == "log":
             F_tab = criterion.cdf(logits=logits, y=z_grid)
         elif target_scale == "original":
-            F_tab_raw = criterion.cdf(logits=logits, y=torch.expm1(z_grid))
-            F_tab = torch.where(z_grid < 0, torch.zeros_like(F_tab_raw), F_tab_raw)
+            F_tab = criterion.cdf(logits=logits, y=torch.expm1(z_grid))
         
         crps_b, w1_b, ks_b = _integrate_distribution_metrics(z_grid, F_emp, F_tab, batch_z_original, device)
         all_w1.append(w1_b.detach().cpu()); all_ks.append(ks_b.detach().cpu()); all_crps.append(crps_b.detach().cpu())
@@ -142,7 +157,7 @@ def calculate_metrics_lognormal(
 
     llh = lognormal_dist.log_prob(y_test_original).clamp(min=MIN_CLAMP_LLH)
     llh += z_test_original  # Jacobian correction
-    bias = -torch.log(z_test_original.max(dim=1)[0])
+    bias = -torch.log(torch.max(z_test_original, dim=1)[0])
     all_nllh = -llh.mean(dim=1) + bias
 
     return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks)

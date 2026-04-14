@@ -27,3 +27,4 @@ class ExperimentConfig:
     hpo_time: Optional[int] = None
     feature_agnostic: bool = False
     oracle: bool = False
+    remove_duplicates: bool = False

@@ -8,7 +8,7 @@ def set_seed(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-def loss_fn(y_true, y_pred):
+def loss_fn_max(y_true, y_pred):
     """
     Negative log-likelihood loss for log-normal distribution.
     y_true: tensor of shape [batch, 1]
@@ -27,6 +27,25 @@ def loss_fn(y_true, y_pred):
     lh = -torch.log(shape) - log_true - help1
     return -lh.mean()
 
+def loss_fn_log(y_true, y_pred):
+    """
+    Negative log-likelihood loss for Normal distribution.
+    Used when targets are log-scaled.
+    y_true: tensor of shape [batch, 1]
+    y_pred: tensor of shape [batch, 2] -> [mu, sigma]
+    """
+    assert y_true.size(1) == 1, "y_true must be of shape [batch, 1]"
+    assert y_pred.size(1) == 2, "y_pred must be of shape [batch, 2]"
+    assert len(y_true) == len(y_pred), "loss_fn_log: y_true and y_pred must have the same batch size"
+
+    y_true = y_true.to(y_pred.device)
+    mu = y_pred[:, 0:1]    
+    sigma = y_pred[:, 1:2] 
+    
+    help1 = 0.5 * (((y_true - mu) / sigma) ** 2)
+    nll = torch.log(sigma) + help1
+    return nll.mean()
+
 class DistNet(nn.Module):
     def __init__(self, n_input_features):
         super(DistNet, self).__init__()
@@ -38,6 +57,10 @@ class DistNet(nn.Module):
         self.tanh = nn.Tanh()
 
     def forward(self, x):
+        '''
+        For max-scale: outputs [shape, scale]
+        For log-scale: outputs [mu, sigma]
+        '''
         x = self.tanh(self.bn1(self.fc1(x)))
         x = self.tanh(self.bn2(self.fc2(x)))
         return torch.exp(self.out(x))
@@ -45,6 +68,7 @@ class DistNet(nn.Module):
 class DistNetModel:
     def __init__(
         self,
+        model_target_scale,
         n_input_features,
         n_epochs,
         batch_size,
@@ -56,7 +80,9 @@ class DistNetModel:
         early_stopping=False,
         early_stopping_patience=50,
     ):
+        assert model_target_scale in ['max', 'log'], "Invalid target_scale for DistNet. Only 'max' and 'log' are supported."
         set_seed(random_state)
+        self.model_target_scale = model_target_scale
         self.n_epochs = n_epochs
         self.expected_n_epochs = n_epochs
         self.wc_time_limit = wc_time_limit  # seconds
@@ -131,6 +157,9 @@ class DistNetModel:
 
         n_samples = X.size(0)
         start_time = time.time()
+
+        criterion = loss_fn_log if self.model_target_scale == 'log' else loss_fn_max
+        
         for epoch in range(1, self.n_epochs + 1):
             epoch_loss = 0.0
             indices = torch.randperm(n_samples, device=self.device)
@@ -143,7 +172,7 @@ class DistNetModel:
                 bx, by = X[idx], y[idx]
                 self.optimizer.zero_grad()
                 preds = self.model(bx)
-                loss = loss_fn(by, preds)
+                loss = criterion(by, preds)
                 loss.backward()
                 nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1e-2)
                 self.optimizer.step()
@@ -158,7 +187,7 @@ class DistNetModel:
                 self.model.eval()
                 with torch.inference_mode():
                     vpred = self.model(self.X_valid)
-                    val_loss = loss_fn(self.y_valid, vpred)
+                    val_loss = criterion(self.y_valid, vpred)
                 # Early stopping check
                 if self.early_stopping:
                     if val_loss < self.best_val_loss:

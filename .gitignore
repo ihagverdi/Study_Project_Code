@@ -18,3 +18,4 @@ smac3_output/
 *.png
 *copy*
 tests.py
+*.ipynb

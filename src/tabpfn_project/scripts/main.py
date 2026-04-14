@@ -52,6 +52,7 @@ def train_test_model(cfg: ExperimentConfig):
         'save_dir': str(save_dir),
         'n_features': X_train.shape[1],
         'feature_agnostic': cfg.feature_agnostic,
+        'remove_duplicates': cfg.remove_duplicates,
         'oracle': cfg.oracle,
         'do_hpo': cfg.do_hpo,
         'hpo_time': cfg.hpo_time,
@@ -75,6 +76,7 @@ if __name__ == "__main__":
     parser.add_argument("--scenario", type=str, required=True, choices=DISTNET_SCENARIOS)
     parser.add_argument("--model", type=str, required=True, choices=MODELS)
     parser.add_argument("--feature_agnostic", action="store_true")
+    parser.add_argument("--remove_duplicates", action="store_true")
     parser.add_argument("--oracle", action="store_true")
     parser.add_argument("--fold", type=int, required=True, choices=range(10))
     parser.add_argument("--num_samples_per_instance", type=int, default=100)
@@ -104,7 +106,8 @@ if __name__ == "__main__":
         seed_feature_drop_rate=args.seed_feature_drop_rate, feature_drop_rate=args.feature_drop_rate,
         val_batch_size=args.val_batch_size, n_epochs=args.n_epochs, batch_size=args.batch_size,
         wc_time_limit=args.wc_time_limit, seed_samples_per_instance=args.seed_samples_per_instance,
-        do_hpo=args.do_hpo, hpo_time=args.hpo_time, feature_agnostic=args.feature_agnostic, oracle=args.oracle
+        do_hpo=args.do_hpo, hpo_time=args.hpo_time, feature_agnostic=args.feature_agnostic, oracle=args.oracle,
+        remove_duplicates=args.remove_duplicates
     )
     
     start = time.perf_counter()

@@ -12,7 +12,7 @@ from tabpfn_project.helper.preprocess import preprocess_features
 from tabpfn_project.globals import (
     N_GRID_POINTS, RANDOM_STATE, 
 )
-from tabpfn_project.helper.utils import generate_experiment_id
+from tabpfn_project.helper.utils import generate_experiment_id, sample_k_per_instance
 from tabpfn_project.helper.y_scalers import max_scaling, log1p_scaling
 from tabpfn_project.paths import RESULTS_DIR
 
@@ -57,7 +57,7 @@ class DistNetHandler(BaseModelHandler):
         from tabpfn_project.helper.calculate_metrics import calculate_metrics_distnet
         from sklearn.model_selection import GroupShuffleSplit
         
-        assert cfg.target_scale in ['max'], "Invalid target_scale for DistNet. Only 'max' is supported."
+        assert cfg.target_scale in ['max', 'log'], "Invalid target_scale for DistNet. Only 'max' and 'log' are supported."
         assert instance_ids is not None, "instance_ids must be provided to prevent data leakage."
 
         device = torch.device('cuda' if (torch.cuda.is_available() and not cfg.use_cpu) else 'cpu')
@@ -71,15 +71,15 @@ class DistNetHandler(BaseModelHandler):
             y_tr, y_val = y_train[tr_idx], y_train[val_idx]
             
             X_tr, X_val, X_test = preprocess_features(X_tr, X_val, X_test, scal="meanstd")
-            y_tr, y_val, y_scale = max_scaling(y_tr, y_val)
-            model = DistNetModel(n_input_features=X_tr.shape[1], n_epochs=cfg.n_epochs, batch_size=cfg.batch_size, 
+            y_tr, y_val, y_scale = (max_scaling(y_tr, y_val) if cfg.target_scale == 'max' else (*log1p_scaling(y_tr, y_val), None))
+            model = DistNetModel(model_target_scale=cfg.target_scale, n_input_features=X_tr.shape[1], n_epochs=cfg.n_epochs, batch_size=cfg.batch_size, 
                                  wc_time_limit=cfg.wc_time_limit, X_valid=X_val, y_valid=y_val, 
                                  early_stopping=True, early_stopping_patience=50, random_state=RANDOM_STATE)
             X_train, y_train = X_tr, y_tr
         else:
             X_train, X_test = preprocess_features(X_train, X_test, scal="meanstd")
-            y_train, y_scale = max_scaling(y_train)
-            model = DistNetModel(n_input_features=X_train.shape[1], n_epochs=cfg.n_epochs, batch_size=cfg.batch_size, 
+            y_train, y_scale = (max_scaling(y_train) if cfg.target_scale == 'max' else (*log1p_scaling(y_train), None))
+            model = DistNetModel(model_target_scale=cfg.target_scale, n_input_features=X_train.shape[1], n_epochs=cfg.n_epochs, batch_size=cfg.batch_size, 
                                  wc_time_limit=cfg.wc_time_limit, early_stopping=False, random_state=RANDOM_STATE)
 
         fit_start = time.perf_counter()
@@ -94,7 +94,7 @@ class DistNetHandler(BaseModelHandler):
 
         metrics_sum, inst_sum = calculate_metrics_distnet(
             y_test, y_pred, device=device, target_scale=cfg.target_scale, y_scaler=y_scale, N_grid_points=N_GRID_POINTS
-        )
+        ); print(f"DistNet Metrics Summary scale={cfg.target_scale}: {metrics_sum}")
 
         return {
             'y_test_preds': y_pred,
@@ -121,9 +121,14 @@ class TabPFNHandler(BaseModelHandler):
         mem_stats = {"fit": {}, "predict": {}}
         
         if not cfg.oracle:
+            if cfg.remove_duplicates:
+                print(f"Removing duplicates: sampling {1} sample(s) per instance ID.")
+                X_train, y_train_scaled, instance_ids = sample_k_per_instance(X_train, y_train_scaled, instance_ids, k=1, seed=RANDOM_STATE)
+
             with track_gpu_memory_and_time(device) as stats:
                 model.fit(X_train, y_train_scaled.ravel())
             mem_stats["fit"] = stats
+
             with track_gpu_memory_and_time(device) as stats:
                 preds = batch_predict_tabpfn(model, X_test, validation_batch_size=cfg.val_batch_size)
         else:
@@ -133,7 +138,7 @@ class TabPFNHandler(BaseModelHandler):
         mem_stats["predict"] = stats
         metrics_sum, inst_sum = calculate_metrics_tabpfn(
             y_test, preds, device=device, target_scale=cfg.target_scale, N_grid_points=N_GRID_POINTS
-        )
+        ); print(f"TabPFN Metrics Summary scale={cfg.target_scale}: {metrics_sum}")
 
         # Save Predictions file separately as per original logic
         self._save_preds(cfg, preds)

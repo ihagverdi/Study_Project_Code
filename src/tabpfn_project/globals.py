@@ -7,7 +7,7 @@ RANDOM_STATE=0  # random state for data splitting, model initialization.
 N_FOLDS = 10
 N_GRID_POINTS = 15000
 
-DISTNET_SCENARIOS = get_sc_dict(DISTNET_DATA_DIR).keys()
+DISTNET_SCENARIOS = list(get_sc_dict(DISTNET_DATA_DIR).keys())
 
 MODELS = ["distnet", "tabpfn", "random_forest", "lognormal"]
 TARGET_SCALES = ["log", "max", "original"]

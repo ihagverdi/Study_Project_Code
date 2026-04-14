@@ -8,6 +8,58 @@ import torch
 import numpy as np
 from scipy.stats import wilcoxon
 
+def sample_k_per_instance(X, y, ids, k, seed):
+    """
+    Samples up to k random samples for each unique instance id without replacement.
+    
+    Args:
+        X (np.ndarray): Flattened features of shape (M, D)
+        y (np.ndarray): Flattened targets of shape (M, 1)
+        ids (np.ndarray): Flattened instance ids of shape (M,)
+        k (int): Max number of samples to keep per unique id.
+        seed (int): Random seed for reproducibility.
+        
+    Returns:
+        X_sampled, y_sampled, ids_sampled
+    """
+    rng = np.random.RandomState(seed)
+    
+    # 1. Generate random noise for every single row
+    # This determines the "random selection" when we sort
+    noise = rng.rand(len(ids))
+    
+    # 2. Sort by instance_id (primary) and then by noise (secondary)
+    # np.lexsort sorts by the last sequence provided first.
+    # This groups all identical IDs together, but shuffles them internally.
+    sorted_indices = np.lexsort((noise, ids))
+    
+    # 3. Reorder the ids to find where each group starts
+    sorted_ids = ids[sorted_indices]
+    
+    # 4. Identify boundaries between different instance IDs
+    # mask[i] is True if sorted_ids[i] is the start of a new ID group
+    mask = np.concatenate(([True], sorted_ids[1:] != sorted_ids[:-1]))
+    
+    # 5. Calculate the rank of each element within its own ID group
+    # Find the index where each group starts
+    start_indices = np.where(mask)[0]
+    # For every row, find the index where its group started
+    # np.diff calculates the size of each group; np.repeat maps the start_index to all rows in that group
+    group_offsets = np.repeat(start_indices, np.diff(np.append(start_indices, len(ids))))
+    
+    # Rank is: (Current Index in sorted array) - (Index where this ID group started)
+    # This creates sequences like: [0, 1, 2, 0, 1, 0, 1, 2, 3...]
+    ranks = np.arange(len(ids)) - group_offsets
+    
+    # 6. Filter: Keep only those with a rank < k
+    # This naturally handles cases where an instance has fewer than k samples
+    keep_mask = ranks < k
+    
+    # 7. Map the mask back to the original data indexing
+    final_indices = sorted_indices[keep_mask]
+    
+    return X[final_indices], y[final_indices], ids[final_indices]
+
 def generate_experiment_id(cfg) -> str:
     """
     Generates a unique, human-readable identifier based on the experiment configuration.
@@ -22,6 +74,7 @@ def generate_experiment_id(cfg) -> str:
         ("ctx", f"{cfg.context_size}_{cfg.subsample_method}_s{cfg.seed_context_size}"),
         ("drop", f"{cfg.feature_drop_rate}_s{cfg.seed_feature_drop_rate}"),
         ("agnostic", cfg.feature_agnostic),
+        ("remove_dups", cfg.remove_duplicates),
         ("scale", cfg.target_scale),
         ("oracle", cfg.oracle),
         ("es", cfg.early_stopping),
@@ -309,34 +362,27 @@ def load_tabpfn_preds(cfg, tabpfn_preds_dir):
 def fetch_save_dict(
     results_dir: pathlib.Path,
     metadata_dir: pathlib.Path,
-    model_save_name: str,
     model_name: str,
+    save_name: str,
     search_key: str | None = None,
     search_value=None,
     scenario: str | None = None,
 ) -> None:
     """
     Build and save a normalized list of experiment results filtered by model/scenario
-    and optional key/value filter.
+    and optional key/value filter, using the current metadata schema.
     """
     experiment_results_lst = []
 
     for fpath in sorted(metadata_dir.glob("*.pkl")):
-        with open(fpath, "rb") as f:
-            if platform.system() == "Windows":
-                results_dict = WindowsPathUnpickler(f).load()
-            else:
-                results_dict = pickle.load(f)
+        results_dict = load_pickle(fpath)
 
-        saved_model = results_dict.get("model_name")
-        if saved_model != model_name:
+        if results_dict.get("model_name") != model_name:
             continue
 
-        # Optional scenario filter
         if scenario is not None and results_dict.get("scenario") != scenario:
             continue
 
-        # Optional arbitrary key-value filter
         if search_key is not None and results_dict.get(search_key) != search_value:
             continue
 
@@ -344,55 +390,61 @@ def fetch_save_dict(
         if context_size in {2**13 + 2000, 2**13 + 4000}:
             continue
 
-        result_metrics = results_dict.get("result_metrics", {})
-        model_specific_info = results_dict.get("model_specific_info", {})
-
-        metrics_summary = result_metrics.get("metrics_summary")
-        instance_summary = result_metrics.get("instance_summary")
-        y_preds = results_dict.get("y_test_preds")
-
-        # Keep legacy field names expected by notebook code
-        best_params = results_dict.get("best_params")
-
-        # Times are model-specific in current schema
-        fit_time = model_specific_info.get("fit_time")
-        predict_time = model_specific_info.get("predict_time")
-        gpu_metrics = model_specific_info.get("mem_time_stats")
-        hpo_time = results_dict.get("hpo_time")
-        y_scale = model_specific_info.get("y_scale")
-        best_epoch = model_specific_info.get("best_epoch")
-
-
+        result_metrics = results_dict.get("result_metrics") or {}
+        model_specific_info = results_dict.get("model_specific_info") or {}
 
         temp = {
+            # Normalized label used by notebooks/plots
+            "model_name": results_dict.get("model_name"),
+
+            # Core experiment identifiers/config from current metadata
+            "save_name": save_name,
             "scenario": results_dict.get("scenario"),
-            "model": model_save_name,
-            "context_size": context_size,
             "fold": results_dict.get("fold"),
-            "context_seed": results_dict.get("seed_context_size", results_dict.get("seed_context")),
+            "context_size": context_size,
+            "seed_context_size": results_dict.get("seed_context_size"),
+            "seed_feature_drop_rate": results_dict.get("seed_feature_drop_rate"),
+            "seed_samples_per_instance": results_dict.get("seed_samples_per_instance"),
             "feature_drop_rate": results_dict.get("feature_drop_rate"),
-            "seed_feature_drop_rate": results_dict.get("seed_feature_drop_rate", results_dict.get("seed_features")),
-            "metrics_summary": metrics_summary,
-            "instance_summary": instance_summary,
-            "best_params": best_params,
-            "y_preds": y_preds,
             "target_scale": results_dict.get("target_scale"),
-            "fit_time": fit_time,
-            "predict_time": predict_time,
-            "hpo_time": hpo_time,
-            "gpu_metrics": gpu_metrics,
+            "subsample_method": results_dict.get("subsample_method"),
+            "num_samples_per_instance": results_dict.get("num_samples_per_instance"),
             "use_cpu": results_dict.get("use_cpu"),
-            "y_scale": y_scale,
-            "best_epoch": best_epoch
+            "save_dir": results_dict.get("save_dir"),
+            "n_features": results_dict.get("n_features"),
+            "feature_agnostic": results_dict.get("feature_agnostic"),
+            "oracle": results_dict.get("oracle"),
+            "do_hpo": results_dict.get("do_hpo"),
+            "hpo_time": results_dict.get("hpo_time"),
+            "hpo_results": results_dict.get("hpo_results"),
+
+            # Current model outputs
+            "y_test_preds": results_dict.get("y_test_preds"),
+            "metrics_summary": result_metrics.get("metrics_summary"),
+            "instance_summary": result_metrics.get("instance_summary"),
+
+            # Current model-specific block
+            "fit_time": model_specific_info.get("fit_time"),
+            "predict_time": model_specific_info.get("predict_time"),
+            "gpu_metrics": model_specific_info.get("mem_time_stats"),
+            "y_scale": model_specific_info.get("y_scale"),
+            "best_epoch": model_specific_info.get("best_epoch"),
+            "val_batch_size": model_specific_info.get("val_batch_size"),
+            "n_epochs": model_specific_info.get("n_epochs"),
+            "model_config": model_specific_info.get("model_config"),
+
+            # Optional backward-compat aliases used by some older notebook logic
+            "context_seed": results_dict.get("seed_context_size"),
+            "y_preds": results_dict.get("y_test_preds"),
         }
 
         experiment_results_lst.append(temp)
 
     scenario_label = scenario if scenario is not None else "all_scenarios"
     if search_key is None:
-        save_name = f"{model_save_name}_{scenario_label}.pkl"
+        save_name = f"{save_name}_{scenario_label}.pkl"
     else:
-        save_name = f"{model_save_name}_{search_key}_{search_value}_{scenario_label}.pkl"
+        save_name = f"{save_name}_{search_key}_{search_value}_{scenario_label}.pkl"
 
     save_file_path = results_dir / save_name
     with open(save_file_path, "wb") as f:

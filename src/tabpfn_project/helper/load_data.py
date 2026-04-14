@@ -46,7 +46,7 @@ def load_features(fl_name):
             feat_dict[key] = val
     return feat_dict
 
-def load_distnet_data(distnet_data_dir, scenario_name, fold) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def load_distnet_data(scenario_name, fold) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     loads the data for the specified scenario and fold from the distnet data directory.
     :param distnet_data_dir: the directory where the distnet data is stored
@@ -54,7 +54,7 @@ def load_distnet_data(distnet_data_dir, scenario_name, fold) -> Tuple[np.ndarray
     :param fold: the fold to load (0-9)
     :return: X_train, X_test, y_train, y_test
     """
-    sc_dict = data_source_release.get_sc_dict(distnet_data_dir)
+    sc_dict = data_source_release.get_sc_dict(DISTNET_DATA_DIR)
 
     runtimes, features, _ = get_data(
         scenario=scenario_name, 
