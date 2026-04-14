@@ -370,9 +370,43 @@ def fetch_save_dict(
 ) -> None:
     """
     Build and save a normalized list of experiment results filtered by model/scenario
-    and optional key/value filter, using the current metadata schema.
+    and optional key/value filter, aligned with the current metadata schema.
+
+    Notes:
+    - Keeps backward-compat aliases used by older notebooks.
+    - Surfaces schema drift via warnings rather than failing hard.
     """
     experiment_results_lst = []
+
+    # Canonical top-level schema emitted by scripts/main.py
+    required_top_level = {
+        "model_name",
+        "scenario",
+        "fold",
+        "seed_context_size",
+        "seed_feature_drop_rate",
+        "seed_samples_per_instance",
+        "feature_drop_rate",
+        "context_size",
+        "target_scale",
+        "subsample_method",
+        "num_samples_per_instance",
+        "use_cpu",
+        "save_dir",
+        "n_samples",
+        "n_features",
+        "instance_ids",
+        "feature_agnostic",
+        "remove_duplicates",
+        "oracle",
+        "do_hpo",
+        "hpo_time",
+        "hpo_results",
+        "result_metrics",
+        "model_specific_info",
+    }
+
+    schema_warning_count = 0
 
     for fpath in sorted(metadata_dir.glob("*.pkl")):
         results_dict = load_pickle(fpath)
@@ -387,11 +421,30 @@ def fetch_save_dict(
             continue
 
         context_size = results_dict.get("context_size")
-        if context_size in {2**13 + 2000, 2**13 + 4000}:
-            continue
+
+        # Warn once per file on top-level schema drift
+        missing_top = sorted(k for k in required_top_level if k not in results_dict)
+        if missing_top:
+            schema_warning_count += 1
+            warnings.warn(
+                f"[fetch_save_dict] Missing keys in {fpath.name}: {missing_top}",
+                stacklevel=2,
+            )
 
         result_metrics = results_dict.get("result_metrics") or {}
         model_specific_info = results_dict.get("model_specific_info") or {}
+
+        # HPO compatibility:
+        # - preferred legacy location: top-level hpo_results
+        # - RF currently stores best_hyperparameters in model_specific_info
+        hpo_results = results_dict.get("hpo_results")
+        if not hpo_results and model_specific_info.get("best_hyperparameters") is not None:
+            hpo_results = model_specific_info.get("best_hyperparameters")
+
+        # Memory/timing compatibility:
+        # - TabPFN stores mem_time_stats; some consumers expect gpu_metrics
+        mem_time_stats = model_specific_info.get("mem_time_stats")
+        gpu_metrics = model_specific_info.get("gpu_metrics", mem_time_stats)
 
         temp = {
             # Normalized label used by notebooks/plots
@@ -411,29 +464,38 @@ def fetch_save_dict(
             "num_samples_per_instance": results_dict.get("num_samples_per_instance"),
             "use_cpu": results_dict.get("use_cpu"),
             "save_dir": results_dict.get("save_dir"),
+            "n_samples": results_dict.get("n_samples"),
             "n_features": results_dict.get("n_features"),
+            "instance_ids": results_dict.get("instance_ids"),
             "feature_agnostic": results_dict.get("feature_agnostic"),
+            "remove_duplicates": results_dict.get("remove_duplicates"),
             "oracle": results_dict.get("oracle"),
             "do_hpo": results_dict.get("do_hpo"),
             "hpo_time": results_dict.get("hpo_time"),
-            "hpo_results": results_dict.get("hpo_results"),
+            "hpo_results": hpo_results,
 
             # Current model outputs
             "y_test_preds": results_dict.get("y_test_preds"),
             "metrics_summary": result_metrics.get("metrics_summary"),
             "instance_summary": result_metrics.get("instance_summary"),
 
-            # Current model-specific block
+            # Model-specific normalized block
             "fit_time": model_specific_info.get("fit_time"),
             "predict_time": model_specific_info.get("predict_time"),
-            "gpu_metrics": model_specific_info.get("mem_time_stats"),
+            "mem_time_stats": mem_time_stats,
+            "gpu_metrics": gpu_metrics,
             "y_scale": model_specific_info.get("y_scale"),
             "best_epoch": model_specific_info.get("best_epoch"),
             "val_batch_size": model_specific_info.get("val_batch_size"),
             "n_epochs": model_specific_info.get("n_epochs"),
             "model_config": model_specific_info.get("model_config"),
+            "best_hyperparameters": model_specific_info.get("best_hyperparameters"),
 
-            # Optional backward-compat aliases used by some older notebook logic
+            # Keep raw nested blocks for forward-compat consumers
+            "result_metrics": result_metrics,
+            "model_specific_info": model_specific_info,
+
+            # Optional backward-compat aliases used by older notebook logic
             "context_seed": results_dict.get("seed_context_size"),
             "y_preds": results_dict.get("y_test_preds"),
         }
@@ -442,12 +504,17 @@ def fetch_save_dict(
 
     scenario_label = scenario if scenario is not None else "all_scenarios"
     if search_key is None:
-        save_name = f"{save_name}_{scenario_label}.pkl"
+        output_name = f"{save_name}_{scenario_label}.pkl"
     else:
-        save_name = f"{save_name}_{search_key}_{search_value}_{scenario_label}.pkl"
+        output_name = f"{save_name}_{search_key}_{search_value}_{scenario_label}.pkl"
 
-    save_file_path = results_dir / save_name
+    save_file_path = results_dir / output_name
     with open(save_file_path, "wb") as f:
         pickle.dump(experiment_results_lst, f)
 
     print(f"Saved to {save_file_path}")
+    if schema_warning_count:
+        print(
+            f"[fetch_save_dict] Completed with schema warnings in "
+            f"{schema_warning_count} metadata file(s)."
+        )
