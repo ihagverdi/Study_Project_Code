@@ -50,6 +50,7 @@ def train_test_model(cfg: ExperimentConfig):
         'num_samples_per_instance': cfg.num_samples_per_instance,
         'use_cpu': cfg.use_cpu,
         'save_dir': str(save_dir),
+        'n_samples': X_train.shape[0],
         'n_features': X_train.shape[1],
         'feature_agnostic': cfg.feature_agnostic,
         'remove_duplicates': cfg.remove_duplicates,
