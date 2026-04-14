@@ -10,11 +10,14 @@ from typing import Dict
 from tabpfn_project.experiment_config import ExperimentConfig
 from tabpfn_project.helper.preprocess import preprocess_features
 from tabpfn_project.globals import (
-    N_GRID_POINTS, RANDOM_STATE, 
+    MIN_CLAMP_LLH, N_GRID_POINTS, RANDOM_STATE, 
 )
 from tabpfn_project.helper.utils import generate_experiment_id
 from tabpfn_project.helper.y_scalers import max_scaling, log1p_scaling
 from tabpfn_project.paths import RESULTS_DIR
+
+from ConfigSpace import ConfigurationSpace, Integer, Float, Categorical
+from smac import HyperparameterOptimizationFacade, Scenario
 
 @contextlib.contextmanager
 def track_gpu_memory_and_time(device_input):
@@ -154,36 +157,6 @@ class TabPFNHandler(BaseModelHandler):
         with open(path / filename, 'wb') as f:
             pickle.dump(preds, f)
 
-class RFHandler(BaseModelHandler):
-    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
-        from tabpfn_project.helper.random_forest import RuntimePredictionRandomForest
-        from tabpfn_project.helper.calculate_metrics import calculate_metrics_random_forest
-        device = torch.device("cuda" if (torch.cuda.is_available() and not cfg.use_cpu) else "cpu")
-
-        X_train, X_test = preprocess_features(X_train, X_test, scal="meanstd")
-        assert cfg.target_scale == 'log'
-        y_train_scaled = log1p_scaling(y_train)[0]
-        
-        model = RuntimePredictionRandomForest(random_state=RANDOM_STATE)
-
-        start = time.perf_counter()
-        model.fit(X_train, y_train_scaled)
-        fit_time = time.perf_counter() - start
-
-        pred_start = time.perf_counter()
-        means, vars = model.predict(X_test)
-        pred_time = time.perf_counter() - pred_start
-
-        metrics_sum, inst_sum = calculate_metrics_random_forest(
-            y_test, (means, vars), device=device, N_grid_points=N_GRID_POINTS
-        ); print(f"Random Forest Metrics Summary scale={cfg.target_scale}: {metrics_sum}")
-
-        return {
-            'y_test_preds': [means, vars],
-            'result_metrics': {'metrics_summary': metrics_sum, 'instance_summary': inst_sum},
-            'model_specific_info': {'fit_time': fit_time, 'predict_time': pred_time}
-        }
-
 class LognormalHandler(BaseModelHandler):
     def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
         from tabpfn_project.helper.calculate_metrics import calculate_metrics_lognormal
@@ -206,4 +179,148 @@ class LognormalHandler(BaseModelHandler):
             'y_test_preds': [mu, sigma],
             'result_metrics': {'metrics_summary': metrics_sum, 'instance_summary': inst_sum},
             'model_specific_info': {}
+        }
+
+class RFHandler(BaseModelHandler):
+    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
+        from tabpfn_project.helper.random_forest import RuntimePredictionRandomForest
+        from sklearn.model_selection import GroupKFold
+        from tabpfn_project.helper.calculate_metrics import calculate_metrics_random_forest
+        
+        device = torch.device("cuda" if (torch.cuda.is_available() and not getattr(cfg, 'use_cpu', False)) else "cpu")
+        assert cfg.target_scale == 'log', "Target scale must be 'log'"
+        
+        do_hpo = getattr(cfg, 'do_hpo', False)
+        
+        if do_hpo:
+            cs = ConfigurationSpace()
+            cs.add([
+                Integer("n_estimators", (10, 50), default=10),
+                Float("max_features", (0.4, 1.0), default=0.5),
+                Integer("min_samples_split", (2, 5), log=True, default=5),
+                Float("var_min", (1e-5, 1e-1), log=True, default=0.01),
+                Categorical("bootstrap", [True, False], default=False)
+            ])
+
+            def smac_objective(config, seed=0) -> float:
+                """
+                Inner optimization loop via GroupKFold.
+                Predictions and evaluations are done directly on all validation observations.
+                """
+                gkf = GroupKFold(n_splits=3)
+                metrics_per_fold =[]
+                
+                for in_train_idx, in_val_idx in gkf.split(X_train, y_train, groups=instance_ids):
+                    X_in_train_raw_split = X_train[in_train_idx]
+                    X_in_val_raw_split = X_train[in_val_idx]
+                    
+                    y_in_train = y_train[in_train_idx]
+                    y_in_val = y_train[in_val_idx]
+                    
+                    # 1. Preprocess purely on inner split (Leakage-Safe)
+                    X_in_train_scaled, X_in_val_scaled = preprocess_features(
+                        X_in_train_raw_split, X_in_val_raw_split, scal="meanstd"
+                    )
+                    
+                    # Apply log1p scaling to inner train targets
+                    y_in_train_scaled = log1p_scaling(y_in_train)[0]
+                    
+                    # 2. Fit Candidate Model
+                    model = RuntimePredictionRandomForest(
+                        random_state=seed, 
+                        n_estimators=config["n_estimators"],
+                        max_features=config["max_features"],
+                        min_samples_split=config["min_samples_split"],
+                        bootstrap=config["bootstrap"],
+                        var_min=config["var_min"],
+                    )
+                    model.fit(X_in_train_scaled, y_in_train_scaled)
+                    
+                    # 3. Direct Prediction on ALL validation rows
+                    means, vars_ = model.predict(X_in_val_scaled)
+                    
+                    m_t = torch.as_tensor(means, dtype=torch.float32, device=device)
+                    v_t = torch.as_tensor(vars_, dtype=torch.float32, device=device)
+                    
+                    # 4. Compute NLL strictly per prediction & aggregate (No bias correction)
+                    z_in_val = torch.log1p(torch.as_tensor(y_in_val, dtype=torch.float32, device=device))
+                    
+                    dist = torch.distributions.Normal(loc=m_t, scale=torch.sqrt(v_t))
+                    llh = dist.log_prob(z_in_val).clamp(min=MIN_CLAMP_LLH)
+                    
+                    # Compute mean NLL over the validation set
+                    nllh = -llh.mean()
+                    metrics_per_fold.append(nllh.item())
+                    
+                return float(np.mean(metrics_per_fold))
+
+            # SMAC3 requires n_trials, use a large limit so that hpo_time serves as the actual cap
+            n_trials = getattr(cfg, 'hpo_n_trials', 999999)
+            hpo_time = getattr(cfg, 'hpo_time', 3600)
+
+            scenario = Scenario(
+                configspace=cs,
+                deterministic=True,
+                n_trials=n_trials,
+                walltime_limit=hpo_time,
+                n_workers=1,
+            )
+            
+            smac = HyperparameterOptimizationFacade(scenario=scenario, target_function=smac_objective)
+            print(f"Starting SMAC3 HPO (Time budget: {hpo_time}s)...")
+            best_config = smac.optimize()
+            best_params = dict(best_config)
+            print(f"HPO Complete. Best hyperparameters: {best_params}")
+
+        else:
+            # HPO is skipped, default to specified base parameters
+            best_params = {
+                "n_estimators": 10,
+                "max_features": 0.5,
+                "min_samples_split": 5,
+                "bootstrap": False,
+                "var_min": 0.01
+            }
+            print(f"HPO disabled. Using default parameters: {best_params}")
+
+        # --- Final Model Training ---
+        # Outer preprocessing step applied safely now that HPO is resolved
+        X_train_final, X_test_final = preprocess_features(X_train, X_test, scal="meanstd")
+        y_train_final = log1p_scaling(y_train)[0]
+
+        final_model = RuntimePredictionRandomForest(
+            random_state=RANDOM_STATE,
+            n_estimators=best_params["n_estimators"],
+            max_features=best_params["max_features"],
+            min_samples_split=best_params["min_samples_split"],
+            bootstrap=best_params["bootstrap"], 
+            var_min=best_params["var_min"],
+        )
+
+        start = time.perf_counter()
+        final_model.fit(X_train_final, y_train_final)
+        fit_time = time.perf_counter() - start
+
+        # Predict strictly on test
+        pred_start = time.perf_counter()
+        means, vars_ = final_model.predict(X_test_final)
+        pred_time = time.perf_counter() - pred_start
+
+        metrics_sum, inst_sum = calculate_metrics_random_forest(
+            y_test, (means, vars_), device=device, N_grid_points=N_GRID_POINTS
+        )
+        
+        print(f"="*20)
+        for k,v in metrics_sum.items():
+            print(f"{k}: {v:.4f}")
+        print(f"="*20)
+
+        return {
+            'y_test_preds': [means, vars_],
+            'result_metrics': {'metrics_summary': metrics_sum, 'instance_summary': inst_sum},
+            'model_specific_info': {
+                'fit_time': fit_time, 
+                'predict_time': pred_time,
+                'best_hyperparameters': best_params
+            }
         }

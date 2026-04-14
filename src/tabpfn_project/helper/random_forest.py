@@ -15,8 +15,7 @@ class RuntimePredictionRandomForest(RandomForestRegressor):
         self,
         n_estimators=10,        # B = 10 throughout the experiments
         max_features=0.5,       # perc = 0.5
-        min_samples_split=6,    # "grown until each node contains no more than n_min data points" (n_min = 5)
-                                # setting this to 6 ensures nodes with <= 5 points are NOT split.
+        min_samples_split=5,
         bootstrap=False,        # "using the full training set for each tree"
         var_min=0.01,           # sigma^2_{min} = 0.01
         criterion="squared_error", # Required to ensure tree impurity equals variance
@@ -37,11 +36,10 @@ class RuntimePredictionRandomForest(RandomForestRegressor):
     def fit(self, X, y, sample_weight=None):
         """
         Fit the random forest model. Handles user-defined shape constraints.
-        X shape: (B, D)
-        y shape: (B, 1)
+        X shape: (N, D)
+        y shape: (N, 1)
         """
         # Scikit-learn expects 1D arrays for single-target regression (B,). 
-        # We handle the user's expected (B, 1) shape silently here.
         if y.ndim == 2 and y.shape[1] == 1:
             y = np.ravel(y)
             
@@ -55,8 +53,8 @@ class RuntimePredictionRandomForest(RandomForestRegressor):
         """
         Predict mean and predictive variance for X based on the Law of Total Variance.
         
-        X shape: (B, D)
-        Returns: Tuple of arrays (means, variances), both of shape (B, 1)
+        X shape: (N, D)
+        Returns: Tuple of arrays (means, variances), both of shape (N, 1)
         """
         check_is_fitted(self)
         
