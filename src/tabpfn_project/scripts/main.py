@@ -52,6 +52,7 @@ def train_test_model(cfg: ExperimentConfig):
         'save_dir': str(save_dir),
         'n_samples': X_train.shape[0],
         'n_features': X_train.shape[1],
+        'instance_ids': instance_ids,
         'feature_agnostic': cfg.feature_agnostic,
         'remove_duplicates': cfg.remove_duplicates,
         'oracle': cfg.oracle,
