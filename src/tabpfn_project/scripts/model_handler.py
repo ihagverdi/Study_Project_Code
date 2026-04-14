@@ -12,7 +12,7 @@ from tabpfn_project.helper.preprocess import preprocess_features
 from tabpfn_project.globals import (
     N_GRID_POINTS, RANDOM_STATE, 
 )
-from tabpfn_project.helper.utils import generate_experiment_id, sample_k_per_instance
+from tabpfn_project.helper.utils import generate_experiment_id
 from tabpfn_project.helper.y_scalers import max_scaling, log1p_scaling
 from tabpfn_project.paths import RESULTS_DIR
 
@@ -121,10 +121,6 @@ class TabPFNHandler(BaseModelHandler):
         mem_stats = {"fit": {}, "predict": {}}
         
         if not cfg.oracle:
-            if cfg.remove_duplicates:
-                print(f"Removing duplicates: sampling {1} sample(s) per instance ID.")
-                X_train, y_train_scaled, instance_ids = sample_k_per_instance(X_train, y_train_scaled, instance_ids, k=1, seed=RANDOM_STATE)
-
             with track_gpu_memory_and_time(device) as stats:
                 model.fit(X_train, y_train_scaled.ravel())
             mem_stats["fit"] = stats
@@ -180,7 +176,7 @@ class RFHandler(BaseModelHandler):
 
         metrics_sum, inst_sum = calculate_metrics_random_forest(
             y_test, (means, vars), device=device, N_grid_points=N_GRID_POINTS
-        )
+        ); print(f"Random Forest Metrics Summary scale={cfg.target_scale}: {metrics_sum}")
 
         return {
             'y_test_preds': [means, vars],
@@ -204,6 +200,7 @@ class LognormalHandler(BaseModelHandler):
             
         dist = torch.distributions.LogNormal(loc=mu, scale=sigma)
         metrics_sum, inst_sum = calculate_metrics_lognormal(y_test, dist, device=device, N_grid_points=N_GRID_POINTS)
+        print(f"Lognormal Metrics Summary scale={cfg.target_scale}: {metrics_sum}")
 
         return {
             'y_test_preds': [mu, sigma],

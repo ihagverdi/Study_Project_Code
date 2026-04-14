@@ -3,9 +3,10 @@ from typing import Tuple
 import numpy as np
 
 from tabpfn_project.experiment_config import ExperimentConfig
+from tabpfn_project.globals import RANDOM_STATE
 from tabpfn_project.helper.load_data import load_distnet_data
 from tabpfn_project.helper.preprocess import del_constant_features
-from tabpfn_project.helper.utils import subsample_features, subsample_flattened_data, subsample_targets_per_instance
+from tabpfn_project.helper.utils import sample_k_per_instance, subsample_features, subsample_flattened_data, subsample_targets_per_instance
 
 def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Handles loading, flattening, and feature subsampling."""
@@ -33,10 +34,15 @@ def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.
             seed=cfg.seed_context_size, subsample_method=cfg.subsample_method
         )
     
-    # 4. Feature Cleaning
+    # 4. deduplication
+    if cfg.remove_duplicates:
+        print(f"Removing duplicates: sampling {1} sample(s) per instance ID.")
+        X_train_flat, y_train_flat, instance_ids_flat = sample_k_per_instance(X_train_flat, y_train_flat, instance_ids_flat, k=1, seed=RANDOM_STATE)
+
+    # 5. Feature Cleaning
     X_train_flat, X_test = del_constant_features(X_train_flat, X_test)
 
-    # 5. Feature Dropping / Agnostic mode
+    # 6. Feature Dropping / Agnostic mode
     drop_rate = 1.0 if cfg.feature_agnostic else cfg.feature_drop_rate
     if drop_rate and drop_rate > 0.0:
         seed = -1 if (cfg.feature_agnostic or drop_rate == 1.0) else cfg.seed_feature_drop_rate
