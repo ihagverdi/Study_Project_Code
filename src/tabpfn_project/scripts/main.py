@@ -10,7 +10,7 @@ from tabpfn_project.globals import (
 )
 from tabpfn_project.helper.utils import generate_experiment_id
 from tabpfn_project.paths import RESULTS_DIR
-from tabpfn_project.scripts.model_handler import DistNetHandler, LognormalHandler, RFHandler, TabPFNHandler
+from tabpfn_project.scripts.model_handler import BayesianDistNetHandler, DistNetHandler, LognormalHandler, RFHandler, TabPFNHandler
 from tabpfn_project.scripts.preprocessing import prepare_datasets
 
 def train_test_model(cfg: ExperimentConfig):
@@ -24,6 +24,7 @@ def train_test_model(cfg: ExperimentConfig):
     # 3. Model Execution
     handlers = {
         'distnet': DistNetHandler(),
+        'bayesian_distnet': BayesianDistNetHandler(),
         'tabpfn': TabPFNHandler(),
         'random_forest': RFHandler(),
         'lognormal': LognormalHandler()

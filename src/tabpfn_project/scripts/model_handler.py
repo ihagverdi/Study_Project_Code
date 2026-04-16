@@ -108,6 +108,75 @@ class DistNetHandler(BaseModelHandler):
             }
         }
 
+class BayesianDistNetHandler(BaseModelHandler):
+    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
+        from tabpfn_project.helper.bayesian_distnet import BayesianDistNetModel
+        from tabpfn_project.helper.calculate_metrics import calculate_metrics_distnet
+        from sklearn.model_selection import GroupShuffleSplit
+
+        assert cfg.target_scale in ['max'], "Invalid target_scale for BayesianDistNet. Only 'max' is supported."
+        assert cfg.early_stopping, "Early stopping must be enabled for BayesianDistNet."
+        assert instance_ids is not None, "instance_ids must be provided to prevent data leakage."
+
+        device = torch.device('cpu')
+
+        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=RANDOM_STATE)
+        tr_idx, val_idx = next(gss.split(X_train, y_train, groups=instance_ids))
+        X_tr, X_val = X_train[tr_idx], X_train[val_idx]
+        y_tr, y_val = y_train[tr_idx], y_train[val_idx]
+
+        X_tr, X_val, X_test = preprocess_features(X_tr, X_val, X_test, scal="meanstd")
+
+        print(f"Early stopping enabled for BayesianDistNet.")
+        y_tr, y_val, y_scale = max_scaling(y_tr, y_val)
+
+        model = BayesianDistNetModel(
+            n_input_features=X_tr.shape[1],
+            X_valid=X_val,
+            y_valid=y_val,
+        )
+
+        fit_start = time.perf_counter()
+        model.train(X_tr, y_tr)
+        fit_time = time.perf_counter() - fit_start
+
+        best_epoch = model.best_epoch
+
+        pred_start = time.perf_counter()
+        y_pred = model.predict(X_test)
+        pred_time = time.perf_counter() - pred_start
+
+        metrics_sum, inst_sum = calculate_metrics_distnet(
+            y_test, y_pred, device=device, target_scale='max', y_scaler=y_scale, N_grid_points=N_GRID_POINTS
+        )
+        
+        print(f"BayesianDistNet Metrics Summary scale=max: {metrics_sum}")
+
+        legacy_posthoc = {}
+        try:
+            scaled_y_test = y_test * y_scale
+            model.predict_samples(X_test)
+            legacy_posthoc = model.evaluate_posthoc_metrics(scaled_y_test)
+        except Exception as exc:
+            legacy_posthoc = {'error': str(exc)}
+
+        if model.model is None:
+            raise RuntimeError("BayesianDistNet model is not initialized after training.")
+
+        return {
+            'y_test_preds': y_pred,
+            'result_metrics': {'metrics_summary': metrics_sum, 'instance_summary': inst_sum},
+            'model_specific_info': {
+                'model_config': model.model.state_dict(),
+                'best_epoch': best_epoch,
+                'fit_time': fit_time,
+                'predict_time': pred_time,
+                'y_scale': y_scale,
+                'n_epochs': model.n_epochs,
+                'legacy_posthoc_metrics': legacy_posthoc,
+            }
+        }
+
 class TabPFNHandler(BaseModelHandler):
     def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
         from tabpfn import TabPFNRegressor

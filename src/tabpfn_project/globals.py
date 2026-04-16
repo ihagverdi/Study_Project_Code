@@ -9,7 +9,7 @@ N_GRID_POINTS = 15000
 
 DISTNET_SCENARIOS = list(get_sc_dict(DISTNET_DATA_DIR).keys())
 
-MODELS = ["distnet", "tabpfn", "random_forest", "lognormal"]
+MODELS = ["distnet", "tabpfn", "bayesian_distnet", "random_forest", "lognormal"]
 TARGET_SCALES = ["log", "max", "original"]
 SUBSAMPLE_METHOD_CHOICES = ["flatten-random"]
 
