@@ -2010,6 +2010,12 @@ def train_model(
     beta_type = training_config["beta_type"]
     total_kl = 0.0
 
+    n_train_batches = len(train_loader)
+    if n_train_batches == 0:
+        raise ValueError(
+            "train_loader is empty. Ensure at least one training sample after subsampling/splitting."
+        )
+
     for batch_idx, data in enumerate(train_loader):
         inputs, rts = data
         optimizer.zero_grad()
@@ -2024,9 +2030,9 @@ def train_model(
                 outputs[:, j] = net_out.flatten()
             kl /= n_ens
 
-            beta = get_beta(batch_idx, len(train_loader), beta_type, epoch, num_epochs)
-            loss = (kl * beta) / len(train_loader) + loss_fn(outputs, rts, reduce=False).sum()
-            total_kl += (kl * beta) / len(train_loader)
+            beta = get_beta(batch_idx, n_train_batches, beta_type, epoch, num_epochs)
+            loss = (kl * beta) / n_train_batches + loss_fn(outputs, rts, reduce=False).sum()
+            total_kl += (kl * beta) / n_train_batches
         elif type(model) is DistNetFCN:
             outputs = model(inputs)
             loss = loss_fn(outputs, rts)
@@ -2042,7 +2048,7 @@ def train_model(
         training_loss += loss.item()
 
     total_kl_value = total_kl.detach().item() if torch.is_tensor(total_kl) else float(total_kl)
-    return training_loss / len(train_loader), total_kl_value
+    return training_loss / n_train_batches, total_kl_value
 
 
 def validate_model(
@@ -2681,17 +2687,24 @@ class BayesianDistNetModel:
         y_tr_t = torch.as_tensor(y_train_obs, dtype=torch.float32, device=device.device)
 
         train_dataset = TensorDataset(X_tr_t, y_tr_t)
-        train_loader = DataLoader(train_dataset, batch_size=self.fixed_training_config["batch_size"], shuffle=True, drop_last=True)
+
+        if len(train_dataset) == 0:
+            raise ValueError("Empty training data after preprocessing/subsampling.")
+        
+        flag_batch_size = self.fixed_training_config["batch_size"]
+        flag_drop_last = len(train_dataset) >= flag_batch_size
+
+        train_loader = DataLoader(train_dataset, batch_size=flag_batch_size, shuffle=True, drop_last=flag_drop_last)
 
         if self.validation_available and self.X_valid is not None and self.y_valid is not None:
             y_val_obs = _add_solution_flag(self.y_valid, lb=0)
             X_val_t = torch.as_tensor(self.X_valid, dtype=torch.float32, device=device.device)
             y_val_t = torch.as_tensor(y_val_obs, dtype=torch.float32, device=device.device)
             val_dataset = TensorDataset(X_val_t, y_val_t)
-            val_loader = DataLoader(val_dataset, batch_size=self.fixed_training_config["batch_size"], shuffle=False)
+            val_loader = DataLoader(val_dataset, batch_size=flag_batch_size, shuffle=False)
             x_export = self.X_valid
         else:
-            val_loader = DataLoader(train_dataset, batch_size=self.fixed_training_config["batch_size"], shuffle=False)
+            val_loader = DataLoader(train_dataset, batch_size=flag_batch_size, shuffle=False)
             x_export = X_train
 
         return train_loader, val_loader, x_export
