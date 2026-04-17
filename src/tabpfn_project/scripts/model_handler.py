@@ -10,7 +10,7 @@ from typing import Dict
 from tabpfn_project.experiment_config import ExperimentConfig
 from tabpfn_project.helper.preprocess import preprocess_features
 from tabpfn_project.globals import (
-    MAX_HPO_TRIALS, MAX_HPO_WCT, MIN_CLAMP_LLH, N_GRID_POINTS, RANDOM_STATE, 
+    MIN_CLAMP_LLH, N_GRID_POINTS, RANDOM_STATE 
 )
 from tabpfn_project.helper.utils import generate_experiment_id
 from tabpfn_project.helper.y_scalers import max_scaling, log1p_scaling
@@ -175,6 +175,7 @@ class TabPFNHandler(BaseModelHandler):
         from tabpfn_project.helper.tabpfn_helpers import batch_predict_tabpfn, oracle_predict_tabpfn
         from tabpfn_project.helper.calculate_metrics import calculate_metrics_tabpfn
         from tabpfn.constants import ModelVersion
+        from tabpfn_project.globals import TABPFN_VAL_BATCH_SIZE
 
         assert cfg.target_scale in ['log', 'original']
         y_train_scaled = (log1p_scaling(y_train)[0] if cfg.target_scale == 'log' else y_train)
