@@ -6,8 +6,15 @@ from tabpfn_project.paths import DISTNET_DATA_DIR
 RANDOM_STATE=0  # random state for data splitting, model initialization.
 N_FOLDS = 10
 N_GRID_POINTS = 15000
-
+MAX_HPO_TRIALS = 1000000
+MAX_HPO_WCT = 3600
 DISTNET_SCENARIOS = list(get_sc_dict(DISTNET_DATA_DIR).keys())
+
+DISTNET_N_EPOCHS = 1000
+DISTNET_BATCH_SIZE = 16
+DISTNET_WCT = 3540
+DISTNET_ES_PATIENCE = 50
+
 
 MODELS = ["distnet", "tabpfn", "bayesian_distnet", "random_forest", "lognormal"]
 TARGET_SCALES = ["log", "max", "original"]
@@ -21,4 +28,5 @@ DISTNET_DROP_SEEDS = [k*1000 for k in range(1,6)]
 MIN_CLAMP_LLH = -200.0  # ~= np.log(1e-87), to prevent numerical issues in log-space.
 
 '''------------------------------------------------------'''
+TABPFN_VAL_BATCH_SIZE = 1000
 

@@ -58,8 +58,6 @@ def train_test_model(cfg: ExperimentConfig):
         'remove_duplicates': cfg.remove_duplicates,
         'oracle': cfg.oracle,
         'do_hpo': cfg.do_hpo,
-        'hpo_time': cfg.hpo_time,
-        'hpo_results': {},
         **model_results
     }
 
@@ -83,7 +81,6 @@ if __name__ == "__main__":
     parser.add_argument("--oracle", action="store_true")
     parser.add_argument("--fold", type=int, required=True, choices=range(10))
     parser.add_argument("--num_samples_per_instance", type=int, default=100)
-    parser.add_argument("--val_batch_size", type=int, default=1000)
     parser.add_argument("--target_scale", type=str, default=None, choices=TARGET_SCALES)
     parser.add_argument("--subsample_method", type=str, default='flatten-random', choices=SUBSAMPLE_METHOD_CHOICES)
     parser.add_argument("--context_size", type=int, default=None)
@@ -92,13 +89,9 @@ if __name__ == "__main__":
     parser.add_argument("--seed_feature_drop_rate", type=int, default=None)
     parser.add_argument("--seed_samples_per_instance", type=int, default=None)
     parser.add_argument("--save_dir", type=str, required=True)
-    parser.add_argument("--n_epochs", type=int, default=1000)
-    parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--wc_time_limit", type=int, default=3540)
     parser.add_argument("--early_stopping", action="store_true")
     parser.add_argument("--use_cpu", action="store_true")
     parser.add_argument("--do_hpo", action="store_true")
-    parser.add_argument("--hpo_time", type=int, default=None)
 
     args = parser.parse_args()
     config = ExperimentConfig(
@@ -107,10 +100,7 @@ if __name__ == "__main__":
         use_cpu=args.use_cpu, target_scale=args.target_scale, subsample_method=args.subsample_method,
         early_stopping=args.early_stopping, seed_context_size=args.seed_context_size,
         seed_feature_drop_rate=args.seed_feature_drop_rate, feature_drop_rate=args.feature_drop_rate,
-        val_batch_size=args.val_batch_size, n_epochs=args.n_epochs, batch_size=args.batch_size,
-        wc_time_limit=args.wc_time_limit, seed_samples_per_instance=args.seed_samples_per_instance,
-        do_hpo=args.do_hpo, hpo_time=args.hpo_time, feature_agnostic=args.feature_agnostic, oracle=args.oracle,
-        remove_duplicates=args.remove_duplicates
+        seed_samples_per_instance=args.seed_samples_per_instance, do_hpo=args.do_hpo, feature_agnostic=args.feature_agnostic, oracle=args.oracle, remove_duplicates=args.remove_duplicates
     )
     
     start = time.perf_counter()

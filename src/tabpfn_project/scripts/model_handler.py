@@ -10,13 +10,13 @@ from typing import Dict
 from tabpfn_project.experiment_config import ExperimentConfig
 from tabpfn_project.helper.preprocess import preprocess_features
 from tabpfn_project.globals import (
-    MIN_CLAMP_LLH, N_GRID_POINTS, RANDOM_STATE, 
+    MAX_HPO_TRIALS, MAX_HPO_WCT, MIN_CLAMP_LLH, N_GRID_POINTS, RANDOM_STATE, 
 )
 from tabpfn_project.helper.utils import generate_experiment_id
 from tabpfn_project.helper.y_scalers import max_scaling, log1p_scaling
 from tabpfn_project.paths import RESULTS_DIR
 
-from ConfigSpace import ConfigurationSpace, Integer, Float, Categorical
+from ConfigSpace import ConfigurationSpace, Integer, Float, Categorical, Constant, EqualsCondition
 from smac import HyperparameterOptimizationFacade, Scenario
 
 @contextlib.contextmanager
@@ -59,6 +59,7 @@ class DistNetHandler(BaseModelHandler):
         from tabpfn_project.helper.distnet_lognormal import DistNetModel
         from tabpfn_project.helper.calculate_metrics import calculate_metrics_distnet
         from sklearn.model_selection import GroupShuffleSplit
+        from tabpfn_project.globals import DISTNET_N_EPOCHS, DISTNET_BATCH_SIZE, DISTNET_WCT, DISTNET_ES_PATIENCE
         
         assert cfg.target_scale in ['max', 'log'], "Invalid target_scale for DistNet. Only 'max' and 'log' are supported."
         assert instance_ids is not None, "instance_ids must be provided to prevent data leakage."
@@ -75,15 +76,15 @@ class DistNetHandler(BaseModelHandler):
             
             X_tr, X_val, X_test = preprocess_features(X_tr, X_val, X_test, scal="meanstd")
             y_tr, y_val, y_scale = (max_scaling(y_tr, y_val) if cfg.target_scale == 'max' else (*log1p_scaling(y_tr, y_val), None))
-            model = DistNetModel(model_target_scale=cfg.target_scale, n_input_features=X_tr.shape[1], n_epochs=cfg.n_epochs, batch_size=cfg.batch_size, 
-                                 wc_time_limit=cfg.wc_time_limit, X_valid=X_val, y_valid=y_val, 
-                                 early_stopping=True, early_stopping_patience=50, random_state=RANDOM_STATE)
+            model = DistNetModel(model_target_scale=cfg.target_scale, n_input_features=X_tr.shape[1], n_epochs=DISTNET_N_EPOCHS, batch_size=DISTNET_BATCH_SIZE, 
+                                 wc_time_limit=DISTNET_WCT, X_valid=X_val, y_valid=y_val, 
+                                 early_stopping=True, early_stopping_patience=DISTNET_ES_PATIENCE, random_state=RANDOM_STATE)
             X_train, y_train = X_tr, y_tr
         else:
             X_train, X_test = preprocess_features(X_train, X_test, scal="meanstd")
             y_train, y_scale = (max_scaling(y_train) if cfg.target_scale == 'max' else (*log1p_scaling(y_train), None))
-            model = DistNetModel(model_target_scale=cfg.target_scale, n_input_features=X_train.shape[1], n_epochs=cfg.n_epochs, batch_size=cfg.batch_size, 
-                                 wc_time_limit=cfg.wc_time_limit, early_stopping=False, random_state=RANDOM_STATE)
+            model = DistNetModel(model_target_scale=cfg.target_scale, n_input_features=X_train.shape[1], n_epochs=DISTNET_N_EPOCHS, batch_size=DISTNET_BATCH_SIZE, 
+                                 wc_time_limit=DISTNET_WCT, early_stopping=False, random_state=RANDOM_STATE)
 
         fit_start = time.perf_counter()
         model.train(X_train, y_train)
@@ -104,7 +105,7 @@ class DistNetHandler(BaseModelHandler):
             'result_metrics': {'metrics_summary': metrics_sum, 'instance_summary': inst_sum},
             'model_specific_info': {
                 'model_config': model.model.state_dict(), 'best_epoch': best_epoch, 'fit_time': fit_time, 
-                'predict_time': pred_time, 'y_scale': y_scale, 'n_epochs': cfg.n_epochs
+                'predict_time': pred_time, 'y_scale': y_scale, 'n_epochs': DISTNET_N_EPOCHS
             }
         }
 
@@ -189,7 +190,7 @@ class TabPFNHandler(BaseModelHandler):
             mem_stats["fit"] = stats
 
             with track_gpu_memory_and_time(device) as stats:
-                preds = batch_predict_tabpfn(model, X_test, validation_batch_size=cfg.val_batch_size)
+                preds = batch_predict_tabpfn(model, X_test, validation_batch_size=TABPFN_VAL_BATCH_SIZE)
         else:
             with track_gpu_memory_and_time(device) as stats:
                 preds = oracle_predict_tabpfn(model, y_test, target_scale=cfg.target_scale)
@@ -205,7 +206,7 @@ class TabPFNHandler(BaseModelHandler):
         return {
             'y_test_preds': None,
             'result_metrics': {'metrics_summary': metrics_sum, 'instance_summary': inst_sum},
-            'model_specific_info': {'mem_time_stats': mem_stats, 'val_batch_size': cfg.val_batch_size}
+            'model_specific_info': {'mem_time_stats': mem_stats, 'val_batch_size': TABPFN_VAL_BATCH_SIZE}
         }
 
     def _save_preds(self, cfg, preds):
@@ -246,27 +247,41 @@ class RFHandler(BaseModelHandler):
         from tabpfn_project.helper.random_forest import RuntimePredictionRandomForest
         from sklearn.model_selection import GroupKFold
         from tabpfn_project.helper.calculate_metrics import calculate_metrics_random_forest
-        
+        from tabpfn_project.globals import MAX_HPO_TRIALS, MAX_HPO_WCT
+
         device = torch.device("cuda" if (torch.cuda.is_available() and not getattr(cfg, 'use_cpu', False)) else "cpu")
         assert cfg.target_scale == 'log', "Target scale must be 'log'"
         
-        do_hpo = getattr(cfg, 'do_hpo', False)
-        
-        if do_hpo:
+        best_params = dict()
+        num_unique_configs = None
+        num_finished_trials = None
+        num_submitted_trials = None
+        if cfg.do_hpo:
+            smac_folder_name = f"rf_hpo_{generate_experiment_id(cfg)}"
             cs = ConfigurationSpace()
+            # TabArena defaults for RF HPO Search Space
             cs.add([
-                Integer("n_estimators", (10, 50), default=10),
+                Constant("n_estimators", 50),
                 Float("max_features", (0.4, 1.0), default=0.5),
+                Float("max_samples", (0.5, 1.0), default=1.0),
+                Float("min_impurity_decrease", (1e-5, 1e-3), log=True),
                 Integer("min_samples_split", (2, 5), log=True, default=5),
                 Float("var_min", (1e-5, 1e-1), log=True, default=0.01),
                 Categorical("bootstrap", [True, False], default=False)
             ])
+            condition = EqualsCondition(cs["max_samples"], cs["bootstrap"], True)
+            cs.add(condition)
 
-            def smac_objective(config, seed=0) -> float:
+            def smac_objective(config, seed) -> float:
                 """
                 Inner optimization loop via GroupKFold.
                 Predictions and evaluations are done directly on all validation observations.
                 """
+                bootstrap_val = config.get("bootstrap", False)
+                max_samples_val = config.get("max_samples", None)
+                if not bootstrap_val:
+                    max_samples_val = None  # Ensure max_samples is ignored when bootstrap=False
+
                 gkf = GroupKFold(n_splits=3)
                 metrics_per_fold =[]
                 
@@ -291,8 +306,10 @@ class RFHandler(BaseModelHandler):
                         n_estimators=config["n_estimators"],
                         max_features=config["max_features"],
                         min_samples_split=config["min_samples_split"],
-                        bootstrap=config["bootstrap"],
+                        bootstrap=bootstrap_val,
                         var_min=config["var_min"],
+                        max_samples=max_samples_val,
+                        min_impurity_decrease=config["min_impurity_decrease"]
                     )
                     model.fit(X_in_train_scaled, y_in_train_scaled)
                     
@@ -314,32 +331,34 @@ class RFHandler(BaseModelHandler):
                     
                 return float(np.mean(metrics_per_fold))
 
-            # SMAC3 requires n_trials, use a large limit so that hpo_time serves as the actual cap
-            n_trials = getattr(cfg, 'hpo_n_trials', 999999)
-            hpo_time = getattr(cfg, 'hpo_time', 3600)
-
             scenario = Scenario(
+                name=smac_folder_name,
                 configspace=cs,
-                deterministic=True,
-                n_trials=n_trials,
-                walltime_limit=hpo_time,
+                n_trials=MAX_HPO_TRIALS,
+                walltime_limit=MAX_HPO_WCT,
                 n_workers=1,
             )
             
-            smac = HyperparameterOptimizationFacade(scenario=scenario, target_function=smac_objective)
-            print(f"Starting SMAC3 HPO (Time budget: {hpo_time}s)...")
+            smac = HyperparameterOptimizationFacade(scenario=scenario, target_function=smac_objective, overwrite=False)
+            print(f"Starting SMAC3 HPO...")
             best_config = smac.optimize()
             best_params = dict(best_config)
             print(f"HPO Complete. Best hyperparameters: {best_params}")
+            num_unique_configs = len(smac.runhistory.get_configs())
+            num_finished_trials = smac.runhistory.finished
+            num_submitted_trials = smac.runhistory.submitted
+            print(f"HPO Trials - Submitted: {num_submitted_trials}, Finished: {num_finished_trials}, Unique Configs Evaluated: {num_unique_configs}")
 
         else:
-            # HPO is skipped, default to specified base parameters
+            # Paper's default RF parameters for runtime prediction (with log-scaling) - No HPO
             best_params = {
                 "n_estimators": 10,
                 "max_features": 0.5,
                 "min_samples_split": 5,
                 "bootstrap": False,
-                "var_min": 0.01
+                "var_min": 0.01,
+                "max_samples": None,
+                "min_impurity_decrease": 0.0,
             }
             print(f"HPO disabled. Using default parameters: {best_params}")
 
@@ -348,14 +367,20 @@ class RFHandler(BaseModelHandler):
         X_train_final, X_test_final = preprocess_features(X_train, X_test, scal="meanstd")
         y_train_final = log1p_scaling(y_train)[0]
 
+        bootstrap_val = best_params.get("bootstrap", False)
+        max_samples_val = best_params.get("max_samples", None)
+        if not bootstrap_val:
+            max_samples_val = None  # Ensure max_samples is ignored when bootstrap=False
         final_model = RuntimePredictionRandomForest(
-            random_state=RANDOM_STATE,
-            n_estimators=best_params["n_estimators"],
-            max_features=best_params["max_features"],
-            min_samples_split=best_params["min_samples_split"],
-            bootstrap=best_params["bootstrap"], 
-            var_min=best_params["var_min"],
-        )
+                        random_state=RANDOM_STATE, 
+                        n_estimators=best_params["n_estimators"],
+                        max_features=best_params["max_features"],
+                        min_samples_split=best_params["min_samples_split"],
+                        bootstrap=bootstrap_val,
+                        var_min=best_params["var_min"],
+                        max_samples=max_samples_val,
+                        min_impurity_decrease=best_params["min_impurity_decrease"]
+                    )
 
         start = time.perf_counter()
         final_model.fit(X_train_final, y_train_final)
@@ -381,6 +406,9 @@ class RFHandler(BaseModelHandler):
             'model_specific_info': {
                 'fit_time': fit_time, 
                 'predict_time': pred_time,
-                'best_hyperparameters': best_params
+                'best_hyperparameters': best_params,
+                'num_unique_configs': num_unique_configs,
+                'num_finished_trials': num_finished_trials,
+                'num_submitted_trials': num_submitted_trials,
             }
         }
