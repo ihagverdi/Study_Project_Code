@@ -2197,9 +2197,9 @@ def train(
 
     best_epoch = 0
     best_state_dict = copy.deepcopy(model.state_dict())
-    periodic_exports: Dict[int, np.ndarray] = {}
-    periodic_model_states: Dict[int, Dict[str, torch.Tensor]] = {}
-    history: List[Dict[str, float]] = []
+    # periodic_exports: Dict[int, np.ndarray] = {}
+    # periodic_model_states: Dict[int, Dict[str, torch.Tensor]] = {}
+    # history: List[Dict[str, float]] = []
 
     for epoch in range(n_epochs):
         train_loss, train_kl = train_model(model, train_loader, optimizer, training_config, total_len, epoch, n_epochs)
@@ -2213,20 +2213,20 @@ def train(
         logger.info(output_msg.format(epoch + 1, train_loss, train_kl, val_loss, log_loss, val_kl))
         counter += 1
 
-        history.append(
-            {
-                "epoch": float(epoch + 1),
-                "train_loss": float(train_loss),
-                "train_kl": float(train_kl),
-                "val_loss": float(val_loss),
-                "val_log_loss": float(log_loss),
-                "val_kl": float(val_kl),
-            }
-        )
+        # history.append(
+        #     {
+        #         "epoch": float(epoch + 1),
+        #         "train_loss": float(train_loss),
+        #         "train_kl": float(train_kl),
+        #         "val_loss": float(val_loss),
+        #         "val_log_loss": float(log_loss),
+        #         "val_kl": float(val_kl),
+        #     }
+        # )
 
-        if epoch % 10 == 0:
-            periodic_exports[epoch] = exportData(X_test, data_path_test, model)
-            periodic_model_states[epoch] = saveModel(model, model_path)
+        # if epoch % 10 == 0:
+        #     periodic_exports[epoch] = exportData(X_test, data_path_test, model)
+        #     periodic_model_states[epoch] = saveModel(model, model_path)
 
         if val_loss < valid_loss_min:
             valid_loss_counter = 0
@@ -2246,11 +2246,11 @@ def train(
     model._memory_training_artifacts = {
         "best_epoch": int(best_epoch),
         "best_val_loss": float(valid_loss_min),
-        "history": history,
-        "periodic_exports": periodic_exports,
-        "periodic_model_states": periodic_model_states,
         "early_stop": int(early_stop),
         "stopped_by_patience": bool(valid_loss_counter >= early_stop),
+        # "history": history,
+        # "periodic_exports": periodic_exports,
+        # "periodic_model_states": periodic_model_states,
     }
     return model
 

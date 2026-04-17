@@ -152,14 +152,6 @@ class BayesianDistNetHandler(BaseModelHandler):
         
         print(f"BayesianDistNet Metrics Summary scale=max: {metrics_sum}")
 
-        legacy_posthoc = {}
-        try:
-            scaled_y_test = y_test * y_scale
-            model.predict_samples(X_test)
-            legacy_posthoc = model.evaluate_posthoc_metrics(scaled_y_test)
-        except Exception as exc:
-            legacy_posthoc = {'error': str(exc)}
-
         if model.model is None:
             raise RuntimeError("BayesianDistNet model is not initialized after training.")
 
@@ -173,7 +165,6 @@ class BayesianDistNetHandler(BaseModelHandler):
                 'predict_time': pred_time,
                 'y_scale': y_scale,
                 'n_epochs': model.n_epochs,
-                'legacy_posthoc_metrics': legacy_posthoc,
             }
         }
 
