@@ -336,6 +336,7 @@ class RFHandler(BaseModelHandler):
                 configspace=cs,
                 n_trials=MAX_HPO_TRIALS,
                 walltime_limit=MAX_HPO_WCT,
+                seed=RANDOM_STATE,
                 n_workers=1,
             )
             
