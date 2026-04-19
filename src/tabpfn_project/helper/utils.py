@@ -2,6 +2,7 @@ from copy import deepcopy
 import pathlib
 import pickle
 import platform
+from typing import Optional, Union
 import pandas as pd
 import warnings
 import torch
@@ -261,12 +262,12 @@ def load_pickle(path, access_mode='rb'):
             results_dict = pickle.load(f)
     return results_dict
 
-def subsample_flattened_data(*arrays, context_size, seed, subsample_method):
+def subsample_data(*arrays, context_size, seed, subsample_method='flatten-random', with_replacement=True):
     """
-    Subsamples the flattened dataset. Currently supports 'flatten-random' which randomly samples from the flattened training data.
+    Subsamples the dataset. Currently supports 'flatten-random' which randomly samples from the training data.
     
     Args:
-        *arrays: Any number of numpy arrays (e.g., X_train_flat, y_train_flat, instance_ids_flat). 
+        *arrays: Any number of numpy arrays (e.g., X_train, y_train, instance_ids). 
                  All must have the same length in the first dimension.
         context_size: Total number of items to return.
         seed: Random seed for reproducibility.
@@ -287,11 +288,72 @@ def subsample_flattened_data(*arrays, context_size, seed, subsample_method):
     rng = np.random.default_rng(seed)
     
     if subsample_method == 'flatten-random':
-        selected_indices = rng.choice(n_samples, size=context_size, replace=True)
+        selected_indices = rng.choice(n_samples, size=context_size, replace=with_replacement)
         # Apply the selected indices to all provided arrays
         return tuple(arr[selected_indices] for arr in arrays)
     else:
         raise ValueError(f"Unknown subsample_method: {subsample_method}")
+
+def append_random_columns(
+    *arrays,
+    n_random_cols: int = 1, 
+    random_state: Optional[Union[int, np.random.Generator]] = None
+):
+    """
+    Augments the feature matrices by appending entirely random continuous columns.
+    
+    Args:
+        X (np.ndarray): The flattened, standardized feature matrix of shape (N, d).
+        n_random_cols (int): The number of independent random columns to append.
+        random_state (int, Generator, optional): Seed or RNG for reproducibility.
+        
+    Returns:
+        List[np.ndarray, ...]: Augmented feature matrices, each of shape (N, d + n_random_cols).
+    """
+    N = arrays[0].shape[0]
+    D = arrays[0].shape[1]
+    assert all(arr.shape[1] == D for arr in arrays), "All input arrays must have the same number of features (shape[1])."
+
+    if n_random_cols < 1:
+        return arrays  # No augmentation needed, return original arrays
+        
+    rng = np.random.default_rng(random_state)
+    
+    augmented_arrays = tuple(np.hstack((arr, rng.standard_normal(
+        size=(arr.shape[0], n_random_cols), 
+        dtype=np.float64
+    ))) for arr in arrays)
+    
+    return augmented_arrays
+
+def add_feature_jitter(
+    X: np.ndarray, 
+    jitter_intensity: float = 1e-3, 
+    random_state: Optional[Union[int, np.random.Generator]] = None
+) -> np.ndarray:
+    """
+    Injects numerically stable, zero-mean Gaussian noise into feature matrix X.
+    
+    Args:
+        X (np.ndarray): Input feature matrix of shape (N, d).
+        jitter_intensity (float): The relative scaling factor for the noise (alpha).
+                                  Default is 1e-3.
+        random_state (int, Generator, optional): Seed or RNG for reproducibility.
+        
+    Returns:
+        np.ndarray: A new jittered feature matrix of shape (N, d).
+    """
+    X_jittered = np.array(X, dtype=np.float64, copy=True)
+    
+    rng = np.random.default_rng(random_state)
+    
+    base_std = np.std(X_jittered, axis=0)
+        
+    noise_stds = jitter_intensity * base_std
+    
+    noise = rng.normal(loc=0.0, scale=noise_stds, size=X_jittered.shape)
+    
+    return X_jittered + noise
 
 def subsample_features(X_train, *arrays, drop_rate, seed):
     """
@@ -334,7 +396,7 @@ def subsample_features(X_train, *arrays, drop_rate, seed):
 
 def subsample_targets_per_instance(y_train, num_samples_per_instance, seed_samples_per_instance):
     """
-    Subsamples a specified number of samples per instance from the training data.
+    Subsamples a specified number of samples per instance from the training data independently per row.
     
     Args:
         y_train: (n_instances, n_samples) - The training labels.
@@ -342,11 +404,25 @@ def subsample_targets_per_instance(y_train, num_samples_per_instance, seed_sampl
         seed_samples_per_instance: The random seed for reproducibility.
 
     Returns:
-        y_train: (n_instances, num_samples_per_instance) - The subsampled training labels.
+        y_train_subsampled: (n_instances, num_samples_per_instance) - The subsampled training labels.
     """
     rng = np.random.default_rng(seed=seed_samples_per_instance)
-    subsample_idx = rng.choice(y_train.shape[1], size=num_samples_per_instance, replace=False)
-    return y_train[:, subsample_idx]
+    
+    # Generate a matrix of random floats with the same shape as y_train
+    rand_matrix = rng.random(y_train.shape)
+    
+    # Argsort each row to get random permutations of indices per row.
+    # Take the first `num_samples_per_instance` indices for each row.
+    # This mathematically guarantees independent sampling WITHOUT replacement per row.
+    subsample_idx = np.argsort(rand_matrix, axis=1)[:, :num_samples_per_instance]
+    
+    # Create row indices for advanced indexing
+    row_idx = np.arange(y_train.shape[0])[:, None]
+    
+    # Extract the independently sampled runtimes
+    y_train_subsampled = y_train[row_idx, subsample_idx]
+    
+    return y_train_subsampled
 
 def load_tabpfn_preds(cfg, tabpfn_preds_dir):
     exp_id = generate_experiment_id(cfg)

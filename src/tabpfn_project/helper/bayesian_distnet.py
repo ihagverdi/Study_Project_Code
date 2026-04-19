@@ -2439,7 +2439,9 @@ def getBhattacharyyaDistance(model_params: np.ndarray, fold_runtimes: np.ndarray
         reference_kde = stats.gaussian_kde(instance)
 
         delta = 1.0 / N_STEPS
-        BC = sum([math.sqrt(reference_kde.pdf(x) * model_dist.pdf(x)) * delta for x in xs])
+        ref_vals = np.asarray(reference_kde.pdf(xs), dtype=np.float64)
+        model_vals = np.asarray(model_dist.pdf(xs), dtype=np.float64)
+        BC = np.sum(np.sqrt(np.maximum(ref_vals * model_vals, 0.0))) * delta
         distance += -np.log(BC + 1e-8)
     return float(distance / len(model_params))
 
@@ -2463,21 +2465,18 @@ def getKLD(model_params: np.ndarray, fold_runtimes: np.ndarray, dist: str, net_t
     kld = 0.0
     xs = np.linspace(0, 1.5, N_STEPS)
     epsilon = 1e-8
+    delta = 1.0 / N_STEPS
+
     for params, instance in zip(model_params, fold_runtimes):
         model_dist = getDistribution(net_type, dist, params)
         reference_kde = stats.gaussian_kde(instance)
 
-        delta = 1.0 / N_STEPS
-        kld += sum(
-            [
-                (
-                    reference_kde.pdf(x)
-                    * (np.log(reference_kde.pdf(x) + epsilon) - np.log(model_dist.pdf(x) + epsilon))
-                )
-                * delta
-                for x in xs
-            ]
-        )
+        ref_vals = np.asarray(reference_kde.pdf(xs), dtype=np.float64)
+        model_vals = np.asarray(model_dist.pdf(xs), dtype=np.float64)
+
+        term = ref_vals * (np.log(ref_vals + epsilon) - np.log(model_vals + epsilon))
+        kld += float(np.sum(term) * delta)
+
     return float(kld / len(model_params))
 
 

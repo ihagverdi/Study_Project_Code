@@ -21,7 +21,7 @@ TARGET_SCALES = ["log", "max", "original"]
 SUBSAMPLE_METHOD_CHOICES = ["flatten-random"]
 
 DISTNET_CONTEXT_SIZES = [2**i for i in range(5, 18)]  # context sizes to evaluate on, from 32 to 131072.
-DISTNET_DROP_RATES = [0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
+DISTNET_DROP_RATES = [0.25, 0.50, 0.75, 0.90, 0.95, 1.0]  # drop rates to evaluate on.
 DISTNET_CONTEXT_SEEDS = [j*100 for j in range(1,6)]
 DISTNET_DROP_SEEDS = [k*1000 for k in range(1,6)]
 

@@ -8,7 +8,7 @@ from typing import Dict
 
 # Project imports
 from tabpfn_project.experiment_config import ExperimentConfig
-from tabpfn_project.helper.preprocess import preprocess_features
+from tabpfn_project.helper.preprocess import Z_score_features
 from tabpfn_project.globals import (
     MIN_CLAMP_LLH, N_GRID_POINTS, RANDOM_STATE 
 )
@@ -74,14 +74,14 @@ class DistNetHandler(BaseModelHandler):
             X_tr, X_val = X_train[tr_idx], X_train[val_idx]
             y_tr, y_val = y_train[tr_idx], y_train[val_idx]
             
-            X_tr, X_val, X_test = preprocess_features(X_tr, X_val, X_test, scal="meanstd")
+            X_tr, X_val, X_test = Z_score_features(X_tr, X_val, X_test, scal="meanstd")
             y_tr, y_val, y_scale = (max_scaling(y_tr, y_val) if cfg.target_scale == 'max' else (*log1p_scaling(y_tr, y_val), None))
             model = DistNetModel(model_target_scale=cfg.target_scale, n_input_features=X_tr.shape[1], n_epochs=DISTNET_N_EPOCHS, batch_size=DISTNET_BATCH_SIZE, 
                                  wc_time_limit=DISTNET_WCT, X_valid=X_val, y_valid=y_val, 
                                  early_stopping=True, early_stopping_patience=DISTNET_ES_PATIENCE, random_state=RANDOM_STATE)
             X_train, y_train = X_tr, y_tr
         else:
-            X_train, X_test = preprocess_features(X_train, X_test, scal="meanstd")
+            X_train, X_test = Z_score_features(X_train, X_test, scal="meanstd")
             y_train, y_scale = (max_scaling(y_train) if cfg.target_scale == 'max' else (*log1p_scaling(y_train), None))
             model = DistNetModel(model_target_scale=cfg.target_scale, n_input_features=X_train.shape[1], n_epochs=DISTNET_N_EPOCHS, batch_size=DISTNET_BATCH_SIZE, 
                                  wc_time_limit=DISTNET_WCT, early_stopping=False, random_state=RANDOM_STATE)
@@ -126,7 +126,7 @@ class BayesianDistNetHandler(BaseModelHandler):
         X_tr, X_val = X_train[tr_idx], X_train[val_idx]
         y_tr, y_val = y_train[tr_idx], y_train[val_idx]
 
-        X_tr, X_val, X_test = preprocess_features(X_tr, X_val, X_test, scal="meanstd")
+        X_tr, X_val, X_test = Z_score_features(X_tr, X_val, X_test, scal="meanstd")
 
         print(f"Early stopping enabled for BayesianDistNet.")
         y_tr, y_val, y_scale = max_scaling(y_tr, y_val)
@@ -174,6 +174,7 @@ class TabPFNHandler(BaseModelHandler):
         from tabpfn import TabPFNRegressor
         from tabpfn_project.helper.tabpfn_helpers import batch_predict_tabpfn, oracle_predict_tabpfn
         from tabpfn_project.helper.calculate_metrics import calculate_metrics_tabpfn
+        from tabpfn_project.helper.utils import add_feature_jitter, append_random_columns
         from tabpfn.constants import ModelVersion
         from tabpfn_project.globals import TABPFN_VAL_BATCH_SIZE
 
@@ -186,6 +187,17 @@ class TabPFNHandler(BaseModelHandler):
         mem_stats = {"fit": {}, "predict": {}}
         
         if not cfg.oracle:
+            X_train, X_test = Z_score_features(X_train, X_test, scal="meanstd")
+            if cfg.jitter_x:
+                assert cfg.jitter_val is not None, "jitter_val must be provided when jitter_x is enabled."
+                print(f"Applying feature jitter with intensity {cfg.jitter_val} to training data for TabPFN.")
+                X_train = add_feature_jitter(X=X_train, jitter_intensity=cfg.jitter_val, random_state=RANDOM_STATE)
+                
+            if cfg.rand_extend_x:
+                assert cfg.n_rand_cols is not None, "n_rand_cols must be provided when rand_extend_x is enabled."
+                print(f"Applying random feature extension with {cfg.n_rand_cols} columns to training data for TabPFN.")
+                X_train, X_test = append_random_columns(X_train, X_test, n_random_cols=cfg.n_rand_cols, random_state=RANDOM_STATE)
+
             with track_gpu_memory_and_time(device) as stats:
                 model.fit(X_train, y_train_scaled.ravel())
             mem_stats["fit"] = stats
@@ -294,7 +306,7 @@ class RFHandler(BaseModelHandler):
                     y_in_val = y_train[in_val_idx]
                     
                     # 1. Preprocess purely on inner split (Leakage-Safe)
-                    X_in_train_scaled, X_in_val_scaled = preprocess_features(
+                    X_in_train_scaled, X_in_val_scaled = Z_score_features(
                         X_in_train_raw_split, X_in_val_raw_split, scal="meanstd"
                     )
                     
@@ -366,7 +378,7 @@ class RFHandler(BaseModelHandler):
 
         # --- Final Model Training ---
         # Outer preprocessing step applied safely now that HPO is resolved
-        X_train_final, X_test_final = preprocess_features(X_train, X_test, scal="meanstd")
+        X_train_final, X_test_final = Z_score_features(X_train, X_test, scal="meanstd")
         y_train_final = log1p_scaling(y_train)[0]
 
         bootstrap_val = best_params.get("bootstrap", False)

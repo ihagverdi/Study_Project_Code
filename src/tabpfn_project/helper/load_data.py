@@ -54,13 +54,7 @@ def load_distnet_data(scenario_name, fold) -> Tuple[np.ndarray, np.ndarray, np.n
     :param fold: the fold to load (0-9)
     :return: X_train, X_test, y_train, y_test
     """
-    sc_dict = data_source_release.get_sc_dict(DISTNET_DATA_DIR)
-
-    runtimes, features, _ = get_data(
-        scenario=scenario_name, 
-        sc_dict=sc_dict,
-        retrieve=sc_dict[scenario_name]['use']
-    )
+    runtimes, features, _ = get_data(scenario=scenario_name)
         
     features = np.asarray(features)
     runtimes = np.asarray(runtimes)
@@ -72,7 +66,7 @@ def load_distnet_data(scenario_name, fold) -> Tuple[np.ndarray, np.ndarray, np.n
 
     return features[train_idx], features[test_idx], runtimes[train_idx], runtimes[test_idx]
 
-def get_data(scenario, sc_dict, impute_features=True, retrieve=["SAT", "UNSAT"]):
+def get_data(scenario, impute_features=True):
     """
     Docstring for get_data
     
@@ -84,6 +78,8 @@ def get_data(scenario, sc_dict, impute_features=True, retrieve=["SAT", "UNSAT"])
 
     :return: (runtimes, features, sat_ls)
     """
+    sc_dict = data_source_release.get_sc_dict(DISTNET_DATA_DIR)
+    retrieve=sc_dict[scenario]['use']
     data_dir = os.path.join(DISTNET_DATA_DIR, sc_dict[scenario]["scen"])
     runtimes, inst_ls, sat_ls = \
         read_results(data_dir=data_dir, cutoff=sc_dict[scenario]["cutoff"],

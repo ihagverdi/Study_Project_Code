@@ -125,7 +125,7 @@ def del_constant_features(X_train, *arrays):
     
     return X_train_filtered, *filtered_arrays
 
-def preprocess_features(X_train, *arrays, scal="meanstd"):
+def Z_score_features(X_train, *arrays, scal="meanstd"):
     """
     Preprocesses training data and applies the same transformation to any number of 
     additional arrays (validation, test, etc).
@@ -139,7 +139,6 @@ def preprocess_features(X_train, *arrays, scal="meanstd"):
     std_ = X_train.std(axis=0)
     
     # Safety: prevent division by zero if a feature has 0 variance 
-    # (should be handled by delete_constant_features, but good practice to double check)
     std_[std_ == 0] = 1.0
     
     # Apply to training data

@@ -14,6 +14,11 @@ class ExperimentConfig:
     use_cpu: bool = False
     target_scale: Optional[str] = None
     subsample_method: str = 'flatten-random'
+    subsample_from_unflattened: bool = False
+    jitter_x: bool = False
+    jitter_val: Optional[float] = None
+    rand_extend_x: bool = False
+    n_rand_cols: Optional[int] = None
     early_stopping: bool = False
     seed_context_size: Optional[int] = None
     seed_feature_drop_rate: Optional[int] = None
