@@ -28,7 +28,8 @@ def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.
     if cfg.num_samples_per_instance != 100:
         assert 1 <= cfg.num_samples_per_instance <= 100
         assert cfg.seed_samples_per_instance is not None
-        y_train = subsample_targets_per_instance(y_train, cfg.num_samples_per_instance, cfg.seed_samples_per_instance)
+        if cfg.num_samples_per_instance < 100:
+            y_train = subsample_targets_per_instance(y_train, cfg.num_samples_per_instance, cfg.seed_samples_per_instance)
 
     if cfg.subsample_from_unflattened:
         print(f"Subsampling from unflattened data with context size {cfg.context_size} and seed {cfg.seed_context_size}.")

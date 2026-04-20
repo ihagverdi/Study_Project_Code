@@ -79,6 +79,8 @@ def generate_experiment_id(cfg) -> str:
         ("scale", cfg.target_scale),
         ("oracle", cfg.oracle),
         ("es", cfg.early_stopping),
+        ("jitterX", f"{cfg.jitter_x}_val{cfg.jitter_val}"),
+        ("randExt", f"{cfg.rand_extend_x}_n{cfg.n_rand_cols}"),
         (None, 'cpu' if cfg.use_cpu else 'gpu')
     ]
     
