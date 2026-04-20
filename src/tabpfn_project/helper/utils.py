@@ -328,7 +328,7 @@ def append_random_columns(
 
 def add_feature_jitter(
     X: np.ndarray, 
-    jitter_intensity: float = 1e-3, 
+    jitter_intensity: float, 
     random_state: Optional[Union[int, np.random.Generator]] = None
 ) -> np.ndarray:
     """
@@ -446,22 +446,30 @@ def fetch_save_dict(
 ) -> None:
     """
     Build and save a normalized list of experiment results filtered by model/scenario
-    and optional key/value filter, aligned with the current metadata schema.
+    and optional key/value filter, aligned with current metadata produced by scripts/main.py
+    and scripts/model_handler.py.
 
     Notes:
     - Keeps backward-compat aliases used by older notebooks.
-    - Surfaces schema drift via warnings rather than failing hard.
+    - Resolves overlap fields explicitly (HPO/memory metrics).
+    - Preserves unknown future fields in dedicated pass-through buckets.
     """
     experiment_results_lst = []
 
-    # Canonical top-level schema emitted by scripts/main.py
-    required_top_level = {
+    # Core top-level fields produced by scripts/main.py (+ merged model outputs).
+    # Keep this list explicit so schema drift is visible and controlled.
+    expected_top_level = {
         "model_name",
         "scenario",
         "fold",
         "seed_context_size",
         "seed_feature_drop_rate",
         "seed_samples_per_instance",
+        "jitter_x",
+        "jitter_val",
+        "rand_extend_x",
+        "n_rand_cols",
+        "subsample_from_unflattened",
         "feature_drop_rate",
         "context_size",
         "target_scale",
@@ -476,10 +484,37 @@ def fetch_save_dict(
         "remove_duplicates",
         "oracle",
         "do_hpo",
-        "hpo_time",
-        "hpo_results",
+        "y_test_preds",
         "result_metrics",
         "model_specific_info",
+    }
+
+    # Legacy/optional top-level fields that may appear in older or alternate runs.
+    optional_top_level = {
+        "early_stopping",
+        "hpo_time",
+        "hpo_results",
+    }
+
+    # Explicitly normalized keys from model_specific_info across handlers.
+    normalized_model_specific_keys = {
+        "fit_time",
+        "predict_time",
+        "mem_time_stats",
+        "gpu_metrics",
+        "y_scale",
+        "best_epoch",
+        "val_batch_size",
+        "n_epochs",
+        "model_config",
+        "best_hyperparameters",
+        # RF HPO run diagnostics
+        "num_unique_configs",
+        "num_finished_trials",
+        "num_submitted_trials",
+        # Optional legacy/alt locations
+        "hpo_time",
+        "hpo_results",
     }
 
     schema_warning_count = 0
@@ -496,47 +531,48 @@ def fetch_save_dict(
         if search_key is not None and results_dict.get(search_key) != search_value:
             continue
 
-        context_size = results_dict.get("context_size")
-
-        # Warn once per file on top-level schema drift
-        missing_top = sorted(k for k in required_top_level if k not in results_dict)
-        if missing_top:
-            schema_warning_count += 1
-            warnings.warn(
-                f"[fetch_save_dict] Missing keys in {fpath.name}: {missing_top}",
-                stacklevel=2,
-            )
-
+        
         result_metrics = results_dict.get("result_metrics") or {}
         model_specific_info = results_dict.get("model_specific_info") or {}
 
-        # HPO compatibility:
-        # - preferred legacy location: top-level hpo_results
-        # - RF currently stores best_hyperparameters in model_specific_info
+        # Explicit overlap resolution:
+        # 1) hpo_results priority: top-level -> model_specific_info.hpo_results -> best_hyperparameters
         hpo_results = results_dict.get("hpo_results")
-        if not hpo_results and model_specific_info.get("best_hyperparameters") is not None:
+        if hpo_results is None:
+            hpo_results = model_specific_info.get("hpo_results")
+        if hpo_results is None:
             hpo_results = model_specific_info.get("best_hyperparameters")
 
-        # Memory/timing compatibility:
-        # - TabPFN stores mem_time_stats; some consumers expect gpu_metrics
+        # 2) hpo_time priority: top-level -> model_specific_info
+        hpo_time = results_dict.get("hpo_time")
+        if hpo_time is None:
+            hpo_time = model_specific_info.get("hpo_time")
+
+        # 3) memory/time compatibility:
+        #    TabPFN uses mem_time_stats; some consumers expect gpu_metrics.
         mem_time_stats = model_specific_info.get("mem_time_stats")
-        gpu_metrics = model_specific_info.get("gpu_metrics", mem_time_stats)
+        gpu_metrics = model_specific_info.get("gpu_metrics")
+        if gpu_metrics is None:
+            gpu_metrics = mem_time_stats
 
         temp = {
             # Normalized label used by notebooks/plots
             "model_name": results_dict.get("model_name"),
 
-            # Core experiment identifiers/config from current metadata
+            # Caller-side tag used in downstream aggregation scripts
             "save_name": save_name,
+
+            # Core experiment config / identifiers from top-level metadata
             "scenario": results_dict.get("scenario"),
             "fold": results_dict.get("fold"),
-            "context_size": context_size,
+            "context_size": results_dict.get("context_size"),
             "seed_context_size": results_dict.get("seed_context_size"),
             "seed_feature_drop_rate": results_dict.get("seed_feature_drop_rate"),
             "seed_samples_per_instance": results_dict.get("seed_samples_per_instance"),
             "feature_drop_rate": results_dict.get("feature_drop_rate"),
             "target_scale": results_dict.get("target_scale"),
             "subsample_method": results_dict.get("subsample_method"),
+            "subsample_from_unflattened": results_dict.get("subsample_from_unflattened"),
             "num_samples_per_instance": results_dict.get("num_samples_per_instance"),
             "use_cpu": results_dict.get("use_cpu"),
             "save_dir": results_dict.get("save_dir"),
@@ -547,8 +583,15 @@ def fetch_save_dict(
             "remove_duplicates": results_dict.get("remove_duplicates"),
             "oracle": results_dict.get("oracle"),
             "do_hpo": results_dict.get("do_hpo"),
-            "hpo_time": results_dict.get("hpo_time"),
+            "early_stopping": results_dict.get("early_stopping"),
+            "hpo_time": hpo_time,
             "hpo_results": hpo_results,
+
+            # Newly introduced main.py args that were previously omitted
+            "jitter_x": results_dict.get("jitter_x"),
+            "jitter_val": results_dict.get("jitter_val"),
+            "rand_extend_x": results_dict.get("rand_extend_x"),
+            "n_rand_cols": results_dict.get("n_rand_cols"),
 
             # Current model outputs
             "y_test_preds": results_dict.get("y_test_preds"),
@@ -566,14 +609,31 @@ def fetch_save_dict(
             "n_epochs": model_specific_info.get("n_epochs"),
             "model_config": model_specific_info.get("model_config"),
             "best_hyperparameters": model_specific_info.get("best_hyperparameters"),
+            "num_unique_configs": model_specific_info.get("num_unique_configs"),
+            "num_finished_trials": model_specific_info.get("num_finished_trials"),
+            "num_submitted_trials": model_specific_info.get("num_submitted_trials"),
 
             # Keep raw nested blocks for forward-compat consumers
             "result_metrics": result_metrics,
             "model_specific_info": model_specific_info,
 
-            # Optional backward-compat aliases used by older notebook logic
+            # Backward-compat aliases used by older notebook logic
             "context_seed": results_dict.get("seed_context_size"),
             "y_preds": results_dict.get("y_test_preds"),
+        }
+
+        # Extensibility: preserve future unknown keys without flattening duplicate semantics.
+        known_top = expected_top_level | optional_top_level
+        temp["extra_top_level"] = {
+            k: v
+            for k, v in results_dict.items()
+            if k not in known_top
+        }
+
+        temp["extra_model_specific_info"] = {
+            k: v
+            for k, v in model_specific_info.items()
+            if k not in normalized_model_specific_keys
         }
 
         experiment_results_lst.append(temp)
