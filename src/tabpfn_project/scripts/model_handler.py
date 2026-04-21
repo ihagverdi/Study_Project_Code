@@ -1,5 +1,3 @@
-import contextlib
-import gc
 import pickle
 import time
 import numpy as np
@@ -12,43 +10,12 @@ from tabpfn_project.helper.preprocess import Z_score_features
 from tabpfn_project.globals import (
     MIN_CLAMP_LLH, N_GRID_POINTS, RANDOM_STATE 
 )
-from tabpfn_project.helper.utils import generate_experiment_id
+from tabpfn_project.helper.utils import generate_experiment_id, track_gpu_memory_and_time
 from tabpfn_project.helper.y_scalers import max_scaling, log1p_scaling
 from tabpfn_project.paths import RESULTS_DIR
 
 from ConfigSpace import ConfigurationSpace, Integer, Float, Categorical, Constant, EqualsCondition
 from smac import HyperparameterOptimizationFacade, Scenario
-
-@contextlib.contextmanager
-def track_gpu_memory_and_time(device_input):
-    is_cuda = False
-    try:
-        device = torch.device(device_input)
-        if device.type == 'cuda' and torch.cuda.is_available():
-            is_cuda = True
-    except Exception:
-        pass
-
-    stats = {"baseline_mb": 0.0, "peak_mb": 0.0, "spike_mb": 0.0, "time_s": 0.0}
-    if is_cuda:
-        gc.collect() 
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats(device)
-        torch.cuda.synchronize(device)
-        baseline_mem_bytes = torch.cuda.memory_allocated(device)
-    
-    start_time = time.perf_counter()
-    yield stats
-    
-    if is_cuda:
-        torch.cuda.synchronize(device)
-        
-    stats["time_s"] = time.perf_counter() - start_time
-    if is_cuda:
-        peak_mem_bytes = torch.cuda.max_memory_allocated(device)
-        stats["baseline_mb"] = baseline_mem_bytes / (1024 ** 2)
-        stats["peak_mb"] = peak_mem_bytes / (1024 ** 2)
-        stats["spike_mb"] = (peak_mem_bytes - baseline_mem_bytes) / (1024 ** 2)
 
 class BaseModelHandler:
     def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray) -> Dict:
@@ -172,49 +139,85 @@ class BayesianDistNetHandler(BaseModelHandler):
 class TabPFNHandler(BaseModelHandler):
     def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
         from tabpfn import TabPFNRegressor
-        from tabpfn_project.helper.tabpfn_helpers import batch_predict_tabpfn, oracle_predict_tabpfn
-        from tabpfn_project.helper.calculate_metrics import calculate_metrics_tabpfn
+        from tabpfn_project.helper.tabpfn_helpers import batch_predict_tabpfn, oracle_predict_tabpfn, TabPFNEnsembleManager
+        from tabpfn_project.helper.calculate_metrics import calculate_metrics_tabpfn_ensemble
         from tabpfn_project.helper.utils import add_feature_jitter, append_random_columns
         from tabpfn.constants import ModelVersion
-        from tabpfn_project.globals import TABPFN_VAL_BATCH_SIZE
+        from tabpfn_project.globals import TABPFN_VAL_BATCH_SIZE, ENSEMBLE_SIZE, ENSEMBLE_STRATEGY
 
         assert cfg.target_scale in ['log', 'original']
         y_train_scaled = (log1p_scaling(y_train)[0] if cfg.target_scale == 'log' else y_train)
         
         device = torch.device('cuda' if (torch.cuda.is_available() and not cfg.use_cpu) else 'cpu')
-        model = TabPFNRegressor.create_default_for_version(ModelVersion.V2_5, ignore_pretraining_limits=True, device=device, random_state=RANDOM_STATE)
-
-        mem_stats = {"fit": {}, "predict": {}}
         
+        ensemble_active = getattr(cfg, 'ensemble', False)
+        
+        # --- BASE DATA TRANSFORMATIONS ---
         if not cfg.oracle:
-            X_train, X_test = Z_score_features(X_train, X_test, scal="meanstd")
-            if cfg.jitter_x:
+            if cfg.jitter_x and not (ensemble_active and ENSEMBLE_STRATEGY == "jitter_ensemble"):
                 assert cfg.jitter_val is not None, "jitter_val must be provided when jitter_x is enabled."
-                print(f"Applying feature jitter with intensity {cfg.jitter_val} to training data for TabPFN.")
+                print(f"Applying baseline feature jitter with intensity {cfg.jitter_val} to training data.")
                 X_train = add_feature_jitter(X=X_train, jitter_intensity=cfg.jitter_val, random_state=RANDOM_STATE)
                 
             if cfg.rand_extend_x:
                 assert cfg.n_rand_cols is not None, "n_rand_cols must be provided when rand_extend_x is enabled."
-                print(f"Applying random feature extension with {cfg.n_rand_cols} columns to training data for TabPFN.")
+                print(f"Applying random feature extension with {cfg.n_rand_cols} columns.")
                 X_train, X_test = append_random_columns(X_train, X_test, n_random_cols=cfg.n_rand_cols, random_state=RANDOM_STATE)
 
+        mem_stats = {"fit": {}, "predict": {}}
+        all_preds = []
+
+        if cfg.oracle:
+            print("Running TabPFN ORACLE model.")
+            model = TabPFNRegressor.create_default_for_version(ModelVersion.V2_5, ignore_pretraining_limits=True, device=device, random_state=RANDOM_STATE)
+            with track_gpu_memory_and_time(device) as stats:
+                preds = oracle_predict_tabpfn(model, y_test, target_scale=cfg.target_scale)
+            all_preds = [preds]
+            mem_stats["predict"] = stats
+
+        elif ensemble_active:
+            print(f"Running TabPFN ENSEMBLE ({ENSEMBLE_SIZE} models) using strategy: {ENSEMBLE_STRATEGY}")
+            # 1. Generate diverse dataset splits
+            datasets = TabPFNEnsembleManager.generate_datasets(
+                X_train=X_train,
+                y_train=y_train_scaled,
+                ensemble_size=ENSEMBLE_SIZE,
+                strategy=ENSEMBLE_STRATEGY,
+                jitter_val=cfg.jitter_val if cfg.jitter_val else 1e-3,
+                random_state=RANDOM_STATE
+            )
+            # 2. Train and Predict across the ensemble
+            all_preds, mem_stats = TabPFNEnsembleManager.train_and_predict(
+                datasets=datasets,
+                X_test=X_test,
+                device=device,
+                random_state=RANDOM_STATE
+            )
+
+        else:
+            print("Running SINGLE TabPFN model.")
+            model = TabPFNRegressor.create_default_for_version(ModelVersion.V2_5, ignore_pretraining_limits=True, device=device, random_state=RANDOM_STATE)
             with track_gpu_memory_and_time(device) as stats:
                 model.fit(X_train, y_train_scaled.ravel())
             mem_stats["fit"] = stats
 
             with track_gpu_memory_and_time(device) as stats:
                 preds = batch_predict_tabpfn(model, X_test, validation_batch_size=TABPFN_VAL_BATCH_SIZE)
-        else:
-            with track_gpu_memory_and_time(device) as stats:
-                preds = oracle_predict_tabpfn(model, y_test, target_scale=cfg.target_scale)
+            all_preds = [preds]
+            mem_stats["predict"] = stats
 
-        mem_stats["predict"] = stats
-        metrics_sum, inst_sum = calculate_metrics_tabpfn(
-            y_test, preds, device=device, target_scale=cfg.target_scale, N_grid_points=N_GRID_POINTS
-        ); print(f"TabPFN Metrics Summary scale={cfg.target_scale}: {metrics_sum}")
+        # --- AGGREGATION & EVALUATION ---
+        # Unpacks the single prediction or the ensemble list into the metric calculator dynamically
+        metrics_sum, inst_sum = calculate_metrics_tabpfn_ensemble(
+            *all_preds, y_test_original=y_test, device=device, target_scale=cfg.target_scale, N_grid_points=N_GRID_POINTS
+        )
+        
+        mode_str = "ENSEMBLE" if ensemble_active else "SINGLE"
+        print(f"\n({mode_str}) TabPFN Metrics Summary (scale={cfg.target_scale}):")
+        for k, v in metrics_sum.items():
+            print(f"{k}: {v:.4f}")
 
-        # Save Predictions file separately as per original logic
-        self._save_preds(cfg, preds)
+        self._save_preds(cfg, all_preds)
 
         return {
             'y_test_preds': None,

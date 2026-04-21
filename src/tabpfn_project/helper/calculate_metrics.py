@@ -65,42 +65,77 @@ def calculate_metrics_distnet(
 
     return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks)
 
-def calculate_metrics_tabpfn(
-    y_test_original, tabpfn_preds, *, device, target_scale, N_grid_points,
+def calculate_metrics_tabpfn_ensemble(
+    *tabpfn_models_preds,
+    y_test_original,
+    device,
+    target_scale,
+    N_grid_points,
 ):
+    """
+    Calculates metrics for an ensemble of TabPFN models by performing Bayesian Model Averaging in both CDF and PDF spaces.
+
+    Args:
+        *tabpfn_models_preds: Variable number of prediction lists from different TabPFN models, all aligned in order for the same X_test.
+        y_test_original: Original target values (unscaled, untransformed) (N, O).
+        device: PyTorch device for computation.
+        target_scale: Whether the TabPFN models were trained on "log" or "original" scale targets.
+        N_grid_points: Number of points to use for numerical integration of distribution metrics.
+
+    Returns:
+        A tuple of (metrics_summary_dict, instance_summary_dict)
+    """
     assert target_scale in ["log", "original"], "target_scale must be 'log' or 'original'"
+    assert len(tabpfn_models_preds) > 0, "At least one model's predictions must be provided."
 
     y_test_original = torch.as_tensor(y_test_original, dtype=torch.float32, device=device)
     z_test_original = torch.log1p(y_test_original)
 
-    all_crps, all_w1, all_ks, all_nllh = [], [], [], []
+    all_crps, all_w1, all_ks, all_nllh = [], [], [],[]
     instance_idx = 0
-    for batch in tabpfn_preds:
-        logits = batch['logits'].to(device)
-        criterion = batch['criterion'].to(device)
-        borders = criterion.borders
+    
+    # Synchronously iterate over batches from all models in the ensemble
+    for batches in zip(*tabpfn_models_preds):
+        # Extract batch_size identically since all models evaluate the same test subset
+        batch_size = batches[0]['logits'].shape[0]
+        assert all(batch['logits'].shape[0] == batch_size for batch in batches), "All models must have the same batch size for each batch index."
 
-        batch_size = logits.shape[0]  # number of instances in the prediction batch
         batch_y_original = y_test_original[instance_idx : instance_idx + batch_size]
         batch_z_original = z_test_original[instance_idx : instance_idx + batch_size]
         
-        # 1. Bounds
+        # 1. Empirical Bounds (Identical for all models)
         min_z_emp = batch_z_original.min(dim=1, keepdim=True)[0]
         max_z_emp = batch_z_original.max(dim=1, keepdim=True)[0]
 
-        bucket_widths = criterion.bucket_widths
-        hn_left, hn_right = criterion.halfnormal_with_p_weight_before(bucket_widths[0]), criterion.halfnormal_with_p_weight_before(bucket_widths[-1])
-        p_val = torch.tensor(0.9999, device=device)
-        
-        min_y_model, max_y_model = borders[1] - hn_left.icdf(p_val), borders[-2] + hn_right.icdf(p_val)
-        if target_scale == "log":
-            min_z_model, max_z_model = min_y_model, max_y_model
-        elif target_scale == "original":
-            min_z_model, max_z_model = torch.log1p(torch.clamp(min_y_model, min=0.0)), torch.log1p(torch.clamp(max_y_model, min=0.0))
+        # 1b. Model Bounds (Aggregated across the ensemble)
+        min_z_models, max_z_models = [], []
+        for batch in batches:
+            criterion = batch['criterion'].to(device)
+            borders = criterion.borders
+            bucket_widths = criterion.bucket_widths
+            hn_left = criterion.halfnormal_with_p_weight_before(bucket_widths[0])
+            hn_right = criterion.halfnormal_with_p_weight_before(bucket_widths[-1])
+            p_val = torch.tensor(0.9999, device=device)
+            
+            min_y_model = borders[1] - hn_left.icdf(p_val)
+            max_y_model = borders[-2] + hn_right.icdf(p_val)
+            
+            if target_scale == "log":
+                min_z_m, max_z_m = min_y_model, max_y_model
+            elif target_scale == "original":
+                min_z_m = torch.log1p(torch.clamp(min_y_model, min=0.0))
+                max_z_m = torch.log1p(torch.clamp(max_y_model, min=0.0))
+            
+            min_z_models.append(min_z_m)
+            max_z_models.append(max_z_m)
 
-        # 2. Grid and Integration
-        global_start = torch.minimum(min_z_emp, min_z_model)
-        global_end = torch.maximum(max_z_emp, max_z_model)
+        # The global grid must span the widest extrema across all models
+        global_min_z_model = torch.stack(min_z_models, dim=0).min(dim=0)[0]
+        global_max_z_model = torch.stack(max_z_models, dim=0).max(dim=0)[0]
+
+        # 2. Shared Grid and Integration
+        global_start = torch.minimum(min_z_emp, global_min_z_model)
+        global_end = torch.maximum(max_z_emp, global_max_z_model)
 
         steps = torch.linspace(0, 1, N_grid_points, device=device).view(1, -1)
         z_grid = global_start + steps * (global_end - global_start)
@@ -108,24 +143,43 @@ def calculate_metrics_tabpfn(
         indicator = (batch_z_original.unsqueeze(1) <= z_grid.unsqueeze(2)).float()
         F_emp = indicator.mean(dim=2)
         
-        if target_scale == "log":
-            F_tab = criterion.cdf(logits=logits, y=z_grid)
-        elif target_scale == "original":
-            F_tab = criterion.cdf(logits=logits, y=torch.expm1(z_grid))
+        # 2b. Compute and Aggregate CDFs (Bayesian Model Averaging in CDF space)
+        F_tabs =[]
+        for batch in batches:
+            logits = batch['logits'].to(device)
+            criterion = batch['criterion'].to(device)
+            if target_scale == "log":
+                F_tabs.append(criterion.cdf(logits=logits, y=z_grid))
+            elif target_scale == "original":
+                F_tabs.append(criterion.cdf(logits=logits, y=torch.expm1(z_grid)))
         
-        crps_b, w1_b, ks_b = _integrate_distribution_metrics(z_grid, F_emp, F_tab, batch_z_original, device)
-        all_w1.append(w1_b.detach().cpu()); all_ks.append(ks_b.detach().cpu()); all_crps.append(crps_b.detach().cpu())
+        F_tab_agg = torch.stack(F_tabs, dim=0).mean(dim=0)
         
-        # 3. NLLH
-        if target_scale == "log":
-            llh = torch.log(criterion.pdf(logits=logits, y=batch_z_original)).clamp(min=MIN_CLAMP_LLH)
-            bias = -torch.log(torch.max(batch_z_original, dim=1)[0])
-        elif target_scale == "original":
-            llh = torch.log(criterion.pdf(logits=logits, y=batch_y_original)).clamp(min=MIN_CLAMP_LLH)
+        crps_b, w1_b, ks_b = _integrate_distribution_metrics(z_grid, F_emp, F_tab_agg, batch_z_original, device)
+        all_w1.append(w1_b.detach().cpu())
+        all_ks.append(ks_b.detach().cpu())
+        all_crps.append(crps_b.detach().cpu())
+        
+        # 3. NLLH (Bayesian Model Averaging in PDF space)
+        pdfs = []
+        for batch in batches:
+            logits = batch['logits'].to(device)
+            criterion = batch['criterion'].to(device)
+            if target_scale == "log":
+                pdfs.append(criterion.pdf(logits=logits, y=batch_z_original))
+            elif target_scale == "original":
+                pdfs.append(criterion.pdf(logits=logits, y=batch_y_original))
+        
+        # Aggregate pure likelihoods first, then take the log
+        avg_pdf = torch.stack(pdfs, dim=0).mean(dim=0)
+        llh = torch.log(avg_pdf).clamp(min=MIN_CLAMP_LLH)
+        
+        if target_scale == "original":
             llh += batch_z_original # Jacobian correction
-            bias = -torch.log(torch.max(batch_z_original, dim=1)[0])
-
+        
+        bias = -torch.log(torch.max(batch_z_original, dim=1)[0])
         batch_nllh = -llh.mean(dim=1) + bias
+        
         all_nllh.append(batch_nllh.detach().cpu())
         instance_idx += batch_size
         

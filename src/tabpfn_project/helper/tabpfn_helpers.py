@@ -1,8 +1,83 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 import torch
 import numpy as np
 from tabpfn_project.helper.utils import dict_to_cpu
 from tabpfn_project.helper.y_scalers import log1p_scaling
+from tabpfn_project.scripts.model_handler import track_gpu_memory_and_time
+
+class TabPFNEnsembleManager:
+    """
+    Abstracts the logic for generating diverse datasets and training 
+    multiple TabPFN models.
+    """
+    @staticmethod
+    def generate_datasets(
+        X_train: np.ndarray, 
+        y_train: np.ndarray, 
+        ensemble_size: int, 
+        strategy: str, 
+        jitter_val: float, 
+        random_state: int
+    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+        
+        rng = np.random.default_rng(random_state)
+        datasets = []
+        N = X_train.shape[0]
+        sample_size = N // ensemble_size
+        
+        for i in range(ensemble_size):
+            if strategy == "subagging":
+                # Implementation of rigorous sampling WITH replacement (Bootstrapping)
+                indices = rng.choice(N, size=sample_size, replace=True)
+                datasets.append((X_train[indices], y_train[indices]))
+                
+            elif strategy == "jitter_ensemble":
+                # Ensure each model gets a unique geometric projection via independent noise
+                from tabpfn_project.helper.utils import add_feature_jitter
+                seed = int(rng.integers(0, 10**9))
+                X_ens = add_feature_jitter(X=X_train, jitter_intensity=jitter_val, random_state=seed)
+                datasets.append((X_ens, y_train.copy()))
+                
+            else:
+                raise ValueError(f"Unknown ensemble strategy: {strategy}")
+                
+        return datasets
+
+    @staticmethod
+    def train_and_predict(
+        datasets: List[Tuple[np.ndarray, np.ndarray]], 
+        X_test: np.ndarray, 
+        device: torch.device, 
+        random_state: int
+    ) -> Tuple[List[Any], Dict[str, List[Any]]]:
+        
+        from tabpfn import TabPFNRegressor
+        from tabpfn.constants import ModelVersion
+        from tabpfn_project.helper.tabpfn_helpers import batch_predict_tabpfn
+        from tabpfn_project.globals import TABPFN_VAL_BATCH_SIZE
+        
+        all_preds = []
+        mem_time_stats = {"fit": [], "predict":[]}
+        
+        for i, (X_tr, y_tr) in enumerate(datasets):
+            model = TabPFNRegressor.create_default_for_version(
+                ModelVersion.V2_5, 
+                ignore_pretraining_limits=True, 
+                device=device, 
+                random_state=random_state
+            )
+            
+            with track_gpu_memory_and_time(device) as f_stats:
+                model.fit(X_tr, y_tr.ravel())
+            mem_time_stats["fit"].append(f_stats)
+            
+            with track_gpu_memory_and_time(device) as p_stats:
+                preds = batch_predict_tabpfn(model, X_test, validation_batch_size=TABPFN_VAL_BATCH_SIZE)
+            mem_time_stats["predict"].append(p_stats)
+            
+            all_preds.append(preds)
+            
+        return all_preds, mem_time_stats
 
 def batch_predict_tabpfn(
     model: Any, 

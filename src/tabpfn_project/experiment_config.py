@@ -28,3 +28,4 @@ class ExperimentConfig:
     feature_agnostic: bool = False
     oracle: bool = False
     remove_duplicates: bool = False
+    ensemble: bool = False

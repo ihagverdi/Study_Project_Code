@@ -1,13 +1,47 @@
+import contextlib
 from copy import deepcopy
+import gc
 import pathlib
 import pickle
 import platform
+import time
 from typing import Optional, Union
 import pandas as pd
 import warnings
 import torch
 import numpy as np
 from scipy.stats import wilcoxon
+
+@contextlib.contextmanager
+def track_gpu_memory_and_time(device_input):
+    is_cuda = False
+    try:
+        device = torch.device(device_input)
+        if device.type == 'cuda' and torch.cuda.is_available():
+            is_cuda = True
+    except Exception:
+        pass
+
+    stats = {"baseline_mb": 0.0, "peak_mb": 0.0, "spike_mb": 0.0, "time_s": 0.0}
+    if is_cuda:
+        gc.collect() 
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(device)
+        torch.cuda.synchronize(device)
+        baseline_mem_bytes = torch.cuda.memory_allocated(device)
+    
+    start_time = time.perf_counter()
+    yield stats
+    
+    if is_cuda:
+        torch.cuda.synchronize(device)
+        
+    stats["time_s"] = time.perf_counter() - start_time
+    if is_cuda:
+        peak_mem_bytes = torch.cuda.max_memory_allocated(device)
+        stats["baseline_mb"] = baseline_mem_bytes / (1024 ** 2)
+        stats["peak_mb"] = peak_mem_bytes / (1024 ** 2)
+        stats["spike_mb"] = (peak_mem_bytes - baseline_mem_bytes) / (1024 ** 2)
 
 def sample_k_per_instance(X, y, ids, k, seed):
     """
