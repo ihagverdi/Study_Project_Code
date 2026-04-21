@@ -648,6 +648,8 @@ def fetch_save_dict(
             "num_unique_configs": model_specific_info.get("num_unique_configs"),
             "num_finished_trials": model_specific_info.get("num_finished_trials"),
             "num_submitted_trials": model_specific_info.get("num_submitted_trials"),
+            "ensemble": model_specific_info.get("ensemble"),
+            "ensemble_size": model_specific_info.get("ensemble_size"),
 
             # Keep raw nested blocks for forward-compat consumers
             "result_metrics": result_metrics,

@@ -85,6 +85,7 @@ if __name__ == "__main__":
     parser.add_argument("--remove_duplicates", action="store_true")
     parser.add_argument("--oracle", action="store_true")
     parser.add_argument("--ensemble", action="store_true")
+    parser.add_argument("--ensemble_size", type=int, default=None)
     parser.add_argument("--fold", type=int, required=True, choices=range(10))
     parser.add_argument("--num_samples_per_instance", type=int, default=100)
     parser.add_argument("--target_scale", type=str, default=None, choices=TARGET_SCALES)
@@ -110,7 +111,7 @@ if __name__ == "__main__":
         num_samples_per_instance=args.num_samples_per_instance, context_size=args.context_size,
         use_cpu=args.use_cpu, target_scale=args.target_scale, subsample_method=args.subsample_method,
         subsample_from_unflattened=args.subsample_from_unflattened, early_stopping=args.early_stopping,
-        seed_context_size=args.seed_context_size, seed_feature_drop_rate=args.seed_feature_drop_rate, feature_drop_rate=args.feature_drop_rate, seed_samples_per_instance=args.seed_samples_per_instance, do_hpo=args.do_hpo, feature_agnostic=args.feature_agnostic, oracle=args.oracle, remove_duplicates=args.remove_duplicates, jitter_x=args.jitter_x, rand_extend_x=args.rand_extend_x, n_rand_cols=args.n_rand_cols, jitter_val=args.jitter_val, ensemble=args.ensemble
+        seed_context_size=args.seed_context_size, seed_feature_drop_rate=args.seed_feature_drop_rate, feature_drop_rate=args.feature_drop_rate, seed_samples_per_instance=args.seed_samples_per_instance, do_hpo=args.do_hpo, feature_agnostic=args.feature_agnostic, oracle=args.oracle, remove_duplicates=args.remove_duplicates, jitter_x=args.jitter_x, rand_extend_x=args.rand_extend_x, n_rand_cols=args.n_rand_cols, jitter_val=args.jitter_val, ensemble=args.ensemble, ensemble_size=args.ensemble_size
     )
     
     start = time.perf_counter()

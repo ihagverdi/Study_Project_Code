@@ -29,3 +29,4 @@ class ExperimentConfig:
     oracle: bool = False
     remove_duplicates: bool = False
     ensemble: bool = False
+    ensemble_size: Optional[int] = None

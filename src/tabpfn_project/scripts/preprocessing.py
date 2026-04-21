@@ -43,6 +43,9 @@ def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.
     y_train_flat = y_train.reshape(-1, 1)
     instance_ids_flat = np.repeat(instance_ids, repeats=cfg.num_samples_per_instance)
 
+    if cfg.ensemble:
+        return X_train_flat, X_test, y_train_flat, y_test, instance_ids_flat
+
     if cfg.subsample_from_unflattened:
         X_train_flat, X_test = del_constant_features(X_train_flat, X_test)
         return X_train_flat, X_test, y_train_flat, y_test, instance_ids_flat
