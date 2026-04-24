@@ -614,7 +614,7 @@ def fetch_save_dict(
             "save_dir": results_dict.get("save_dir"),
             "n_samples": results_dict.get("n_samples"),
             "n_features": results_dict.get("n_features"),
-            "instance_ids": results_dict.get("instance_ids"),
+            # "instance_ids": results_dict.get("instance_ids"),
             "feature_agnostic": results_dict.get("feature_agnostic"),
             "remove_duplicates": results_dict.get("remove_duplicates"),
             "oracle": results_dict.get("oracle"),
@@ -631,7 +631,7 @@ def fetch_save_dict(
 
             # Current model outputs
             "y_test_preds": results_dict.get("y_test_preds"),
-            "metrics_summary": result_metrics.get("metrics_summary"),
+            # "metrics_summary": result_metrics.get("metrics_summary"),
             "instance_summary": result_metrics.get("instance_summary"),
 
             # Model-specific normalized block
