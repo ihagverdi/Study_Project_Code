@@ -5,23 +5,19 @@ import time
 # Project imports
 from tabpfn_project.experiment_config import ExperimentConfig
 from tabpfn_project.globals import (
-    DISTNET_SCENARIOS, MODELS,
-    SUBSAMPLE_METHOD_CHOICES, TARGET_SCALES
+    DISTNET_SCENARIOS, MODELS, TARGET_SCALES
 )
-from tabpfn_project.helper.utils import generate_experiment_id
+from tabpfn_project.helper.utils import TargetScale, generate_experiment_id
 from tabpfn_project.paths import RESULTS_DIR
 from tabpfn_project.scripts.model_handler import BayesianDistNetHandler, DistNetHandler, LognormalHandler, RFHandler, TabPFNHandler
-from tabpfn_project.scripts.preprocessing import prepare_datasets
+from tabpfn_project.scripts.prepare_data import prepare_datasets
 
 def train_test_model(cfg: ExperimentConfig):
-    # 1. Setup Directory
     save_dir = RESULTS_DIR / cfg.save_dir.lstrip('/\\')
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # 2. Data Pipeline
-    X_train, X_test, y_train, y_test, instance_ids = prepare_datasets(cfg)
+    X_train_flat, X_test, y_train_flat, y_test, train_group_ids_flat = prepare_datasets(cfg)
 
-    # 3. Model Execution
     handlers = {
         'distnet': DistNetHandler(),
         'bayesian_distnet': BayesianDistNetHandler(),
@@ -34,9 +30,8 @@ def train_test_model(cfg: ExperimentConfig):
         raise ValueError(f"Unsupported model: {cfg.model_name}")
     
     handler = handlers[cfg.model_name]
-    model_results = handler.run(cfg, X_train, X_test, y_train, y_test, instance_ids)
+    model_results = handler.run(cfg, X_train_flat, X_test, y_train_flat, y_test, train_group_ids_flat)
 
-    # 4. Standardize Results Dictionary
     results_dict = {
         'model_name': cfg.model_name,
         'scenario': cfg.scenario,
@@ -48,25 +43,20 @@ def train_test_model(cfg: ExperimentConfig):
         'jitter_val': cfg.jitter_val,
         'rand_extend_x': cfg.rand_extend_x,
         'n_rand_cols': cfg.n_rand_cols,
-        'subsample_from_unflattened': cfg.subsample_from_unflattened,
+        'subsample_unflattened': cfg.subsample_unflattened,
         'feature_drop_rate': cfg.feature_drop_rate,
+        'n_features_keep': cfg.n_features_keep,
         'context_size': cfg.context_size,
-        'target_scale': cfg.target_scale,
-        'subsample_method': cfg.subsample_method,
+        'target_scale': cfg.target_scale.value,
         'num_samples_per_instance': cfg.num_samples_per_instance,
         'use_cpu': cfg.use_cpu,
         'save_dir': str(save_dir),
-        'n_samples': X_train.shape[0],
-        'n_features': X_train.shape[1],
-        'instance_ids': instance_ids,
-        'feature_agnostic': cfg.feature_agnostic,
         'remove_duplicates': cfg.remove_duplicates,
         'oracle': cfg.oracle,
         'do_hpo': cfg.do_hpo,
         **model_results
     }
 
-    # 5. Save Metadata
     exp_id = generate_experiment_id(cfg)
     res_filename = f"{exp_id}_metadata.pkl"
     
@@ -81,22 +71,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Predict algorithm runtime distribution.")
     parser.add_argument("--scenario", type=str, required=True, choices=DISTNET_SCENARIOS)
     parser.add_argument("--model", type=str, required=True, choices=MODELS)
-    parser.add_argument("--feature_agnostic", action="store_true")
     parser.add_argument("--remove_duplicates", action="store_true")
     parser.add_argument("--oracle", action="store_true")
-    parser.add_argument("--ensemble", action="store_true")
-    parser.add_argument("--ensemble_size", type=int, default=None)
     parser.add_argument("--fold", type=int, required=True, choices=range(10))
     parser.add_argument("--num_samples_per_instance", type=int, default=100)
-    parser.add_argument("--target_scale", type=str, default=None, choices=TARGET_SCALES)
-    parser.add_argument("--subsample_method", type=str, default='flatten-random', choices=SUBSAMPLE_METHOD_CHOICES)
-    parser.add_argument("--subsample_from_unflattened", action="store_true")
+    parser.add_argument("--target_scale", type=str, required=True, choices=TARGET_SCALES)
+    parser.add_argument("--subsample_unflattened", action="store_true")
     parser.add_argument("--jitter_x", action="store_true")
     parser.add_argument("--jitter_val", type=float, default=None)
     parser.add_argument("--rand_extend_x", action="store_true")
     parser.add_argument("--n_rand_cols", type=int, default=None)
     parser.add_argument("--context_size", type=int, default=None)
     parser.add_argument("--feature_drop_rate", type=float, default=None)
+    parser.add_argument("--n_features_keep", type=int, default=None)
     parser.add_argument("--seed_context_size", type=int, default=None)
     parser.add_argument("--seed_feature_drop_rate", type=int, default=None)
     parser.add_argument("--seed_samples_per_instance", type=int, default=None)
@@ -109,9 +96,9 @@ if __name__ == "__main__":
     config = ExperimentConfig(
         scenario=args.scenario, model_name=args.model, fold=args.fold, save_dir=args.save_dir,
         num_samples_per_instance=args.num_samples_per_instance, context_size=args.context_size,
-        use_cpu=args.use_cpu, target_scale=args.target_scale, subsample_method=args.subsample_method,
-        subsample_from_unflattened=args.subsample_from_unflattened, early_stopping=args.early_stopping,
-        seed_context_size=args.seed_context_size, seed_feature_drop_rate=args.seed_feature_drop_rate, feature_drop_rate=args.feature_drop_rate, seed_samples_per_instance=args.seed_samples_per_instance, do_hpo=args.do_hpo, feature_agnostic=args.feature_agnostic, oracle=args.oracle, remove_duplicates=args.remove_duplicates, jitter_x=args.jitter_x, rand_extend_x=args.rand_extend_x, n_rand_cols=args.n_rand_cols, jitter_val=args.jitter_val, ensemble=args.ensemble, ensemble_size=args.ensemble_size
+        use_cpu=args.use_cpu, target_scale=TargetScale.from_str(args.target_scale),
+        subsample_unflattened=args.subsample_unflattened, early_stopping=args.early_stopping,
+        seed_context_size=args.seed_context_size, seed_feature_drop_rate=args.seed_feature_drop_rate, feature_drop_rate=args.feature_drop_rate, seed_samples_per_instance=args.seed_samples_per_instance, do_hpo=args.do_hpo, oracle=args.oracle, remove_duplicates=args.remove_duplicates, jitter_x=args.jitter_x, rand_extend_x=args.rand_extend_x, n_rand_cols=args.n_rand_cols, jitter_val=args.jitter_val, n_features_keep=args.n_features_keep
     )
     
     start = time.perf_counter()

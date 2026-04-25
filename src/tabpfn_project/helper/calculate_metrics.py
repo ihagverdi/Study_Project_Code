@@ -1,5 +1,6 @@
 import torch
-from tabpfn_project.globals import MIN_CLAMP_LLH
+from tabpfn_project.globals import LLH_EPSILON
+from tabpfn_project.helper.utils import TargetScale
 
 def calculate_metrics_distnet(
     y_test_original, y_preds, *, device, target_scale, y_scaler, N_grid_points,
@@ -65,11 +66,12 @@ def calculate_metrics_distnet(
 
     return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks)
 
-def calculate_metrics_tabpfn_ensemble(
+def calculate_metrics_tabpfn(
     *tabpfn_models_preds,
     y_test_original,
     device,
     target_scale,
+    y_scaler,
     N_grid_points,
 ):
     """
@@ -79,17 +81,19 @@ def calculate_metrics_tabpfn_ensemble(
         *tabpfn_models_preds: Variable number of prediction lists from different TabPFN models, all aligned in order for the same X_test.
         y_test_original: Original target values (unscaled, untransformed) (N, O).
         device: PyTorch device for computation.
-        target_scale: Whether the TabPFN models were trained on "log" or "original" scale targets.
+        target_scale: Whether the TabPFN models were trained on "log" or "original" or "max" scale targets.
+        y_scaler: The maximum scale used for training if target_scale is "max" (required for correct Jacobian correction).
         N_grid_points: Number of points to use for numerical integration of distribution metrics.
 
     Returns:
         A tuple of (metrics_summary_dict, instance_summary_dict)
     """
-    assert target_scale in ["log", "original"], "target_scale must be 'log' or 'original'"
     assert len(tabpfn_models_preds) > 0, "At least one model's predictions must be provided."
 
     y_test_original = torch.as_tensor(y_test_original, dtype=torch.float32, device=device)
     z_test_original = torch.log1p(y_test_original)
+
+    y_scaler = torch.as_tensor(y_scaler, dtype=torch.float32, device=device) if y_scaler is not None else torch.tensor(1.0, device=device)
 
     all_crps, all_w1, all_ks, all_nllh = [], [], [],[]
     instance_idx = 0
@@ -120,11 +124,16 @@ def calculate_metrics_tabpfn_ensemble(
             min_y_model = borders[1] - hn_left.icdf(p_val)
             max_y_model = borders[-2] + hn_right.icdf(p_val)
             
-            if target_scale == "log":
+            if target_scale == TargetScale.LOG:
                 min_z_m, max_z_m = min_y_model, max_y_model
-            elif target_scale == "original":
+
+            elif target_scale == TargetScale.ORIGINAL:
                 min_z_m = torch.log1p(torch.clamp(min_y_model, min=0.0))
                 max_z_m = torch.log1p(torch.clamp(max_y_model, min=0.0))
+
+            elif target_scale == TargetScale.MAX:
+                min_z_m = torch.log1p(torch.clamp(min_y_model / y_scaler, min=0.0))
+                max_z_m = torch.log1p(torch.clamp(max_y_model / y_scaler, min=0.0))
             
             min_z_models.append(min_z_m)
             max_z_models.append(max_z_m)
@@ -148,10 +157,12 @@ def calculate_metrics_tabpfn_ensemble(
         for batch in batches:
             logits = batch['logits'].to(device)
             criterion = batch['criterion'].to(device)
-            if target_scale == "log":
+            if target_scale == TargetScale.LOG:
                 F_tabs.append(criterion.cdf(logits=logits, y=z_grid))
-            elif target_scale == "original":
+            elif target_scale == TargetScale.ORIGINAL:
                 F_tabs.append(criterion.cdf(logits=logits, y=torch.expm1(z_grid)))
+            elif target_scale == TargetScale.MAX:
+                F_tabs.append(criterion.cdf(logits=logits, y=torch.expm1(z_grid) * y_scaler))
         
         F_tab_agg = torch.stack(F_tabs, dim=0).mean(dim=0)
         
@@ -165,19 +176,26 @@ def calculate_metrics_tabpfn_ensemble(
         for batch in batches:
             logits = batch['logits'].to(device)
             criterion = batch['criterion'].to(device)
-            if target_scale == "log":
-                pdfs.append(criterion.pdf(logits=logits, y=batch_z_original))
-            elif target_scale == "original":
-                pdfs.append(criterion.pdf(logits=logits, y=batch_y_original))
+            if target_scale == TargetScale.LOG:
+                pdfs.append(criterion.pdf(logits=logits, y=batch_z_original).clamp(min=LLH_EPSILON))
+            elif target_scale == TargetScale.ORIGINAL:
+                pdfs.append(criterion.pdf(logits=logits, y=batch_y_original).clamp(min=LLH_EPSILON))
+            elif target_scale == TargetScale.MAX:
+                pdfs.append(criterion.pdf(logits=logits, y=batch_y_original * y_scaler).clamp(min=LLH_EPSILON))
         
         # Aggregate pure likelihoods first, then take the log
         avg_pdf = torch.stack(pdfs, dim=0).mean(dim=0)
-        llh = torch.log(avg_pdf).clamp(min=MIN_CLAMP_LLH)
+        llh = torch.log(avg_pdf)
         
-        if target_scale == "original":
+        if target_scale == TargetScale.ORIGINAL or target_scale == TargetScale.MAX:
             llh += batch_z_original # Jacobian correction
+
+        if target_scale == TargetScale.LOG or target_scale == TargetScale.ORIGINAL:
+            bias = -torch.log(torch.max(batch_z_original, dim=1)[0])
         
-        bias = -torch.log(torch.max(batch_z_original, dim=1)[0])
+        elif target_scale == TargetScale.MAX:
+            bias = -torch.log(torch.max(batch_z_original, dim=1)[0]) - torch.log(y_scaler)
+        
         batch_nllh = -llh.mean(dim=1) + bias
         
         all_nllh.append(batch_nllh.detach().cpu())

@@ -5,12 +5,31 @@ import pathlib
 import pickle
 import platform
 import time
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 import pandas as pd
 import warnings
 import torch
 import numpy as np
 from scipy.stats import wilcoxon
+from enum import Enum
+
+class TargetScale(Enum):
+    LOG = "log"
+    ORIGINAL = "original"
+    MAX = "max"
+
+    @classmethod
+    def from_str(cls, label: str):
+        """Converts a string (from CLI) to an Enum member."""
+        mapping = {
+            "log": cls.LOG,
+            "original": cls.ORIGINAL,
+            "max": cls.MAX
+        }
+        try:
+            return mapping[label.lower()]
+        except KeyError:
+            raise ValueError(f"Invalid target_scale: {label}. Expected one of {list(mapping.keys())}")
 
 @contextlib.contextmanager
 def track_gpu_memory_and_time(device_input):
@@ -106,11 +125,10 @@ def generate_experiment_id(cfg) -> str:
         (None, cfg.scenario),
         (None, str(cfg.fold)),
         ("samp", f"{cfg.num_samples_per_instance}_s{cfg.seed_samples_per_instance}"),
-        ("ctx", f"{cfg.context_size}_{cfg.subsample_method}_s{cfg.seed_context_size}"),
-        ("drop", f"{cfg.feature_drop_rate}_s{cfg.seed_feature_drop_rate}"),
-        ("agnostic", cfg.feature_agnostic),
+        ("ctx", f"{cfg.context_size}_s{cfg.seed_context_size}"),
+        ("drop", f"{cfg.feature_drop_rate}_keep{cfg.n_features_keep}_s{cfg.seed_feature_drop_rate}"),
         ("remove_dups", cfg.remove_duplicates),
-        ("scale", cfg.target_scale),
+        ("scale", cfg.target_scale.value),
         ("oracle", cfg.oracle),
         ("es", cfg.early_stopping),
         ("jitterX", f"{cfg.jitter_x}_val{cfg.jitter_val}"),
@@ -298,19 +316,18 @@ def load_pickle(path, access_mode='rb'):
             results_dict = pickle.load(f)
     return results_dict
 
-def subsample_data(*arrays, context_size, seed, subsample_method='flatten-random', with_replacement=True):
+def subsample_data(*arrays, context_size, seed, with_replacement=True):
     """
-    Subsamples the dataset. Currently supports 'flatten-random' which randomly samples from the training data.
+    Subsamples the dataset.
     
     Args:
-        *arrays: Any number of numpy arrays (e.g., X_train, y_train, instance_ids). 
+        *arrays: Any number of numpy arrays.
                  All must have the same length in the first dimension.
         context_size: Total number of items to return.
         seed: Random seed for reproducibility.
-        subsample_method: Strategy for sampling ('flatten-random')
         
     Returns:
-        Tuple of subsampled arrays corresponding to the inputs.
+        List of subsampled arrays corresponding to the inputs.
     """
     if not arrays:
         raise ValueError("At least one array must be provided.")
@@ -323,12 +340,8 @@ def subsample_data(*arrays, context_size, seed, subsample_method='flatten-random
     
     rng = np.random.default_rng(seed)
     
-    if subsample_method == 'flatten-random':
-        selected_indices = rng.choice(n_samples, size=context_size, replace=with_replacement)
-        # Apply the selected indices to all provided arrays
-        return tuple(arr[selected_indices] for arr in arrays)
-    else:
-        raise ValueError(f"Unknown subsample_method: {subsample_method}")
+    selected_indices = rng.choice(n_samples, size=context_size, replace=with_replacement)
+    return tuple(arr[selected_indices] for arr in arrays)
 
 def append_random_columns(
     *arrays,
@@ -391,46 +404,61 @@ def add_feature_jitter(
     
     return X_jittered + noise
 
-def subsample_features(X_train, *arrays, drop_rate, seed):
+def subsample_features(
+    X_train: np.ndarray, 
+    *arrays,
+    drop_rate: Optional[float] = None, 
+    n_features_keep: Optional[int] = None, 
+    seed
+) -> Tuple[np.ndarray, ...]:
     """
-    Randomly samples a subset of features from the input arrays based on the specified drop rate.
-    If drop_rate >= 1.0, implements a strict marginal baseline (0 features) via a dummy column.
+    Randomly samples a subset of features from the input arrays.
     
     Args:
         X_train: (n_samples, n_features)
-        *arrays: Additional arrays with shape (n_samples, n_features) to subsample features from
-        drop_rate: Fraction of features to drop (0.0 to 1.0)
+        *arrays: Additional arrays with shape (n_samples, n_features)
+        drop_rate: Fraction of features to drop (0.0 to 1.0). Ignored if n_features_keep is set.
+        n_features_keep: Absolute number of features to keep.
         seed: Random seed for reproducibility.
 
     Returns:
         Tuple of subsampled arrays, with the same order as input (X_train, *arrays)
     """
+    n_features = X_train.shape[1]
     
-    # 1. Handle the "0 Features" Marginal Baseline
-    if drop_rate >= 1.0:
+    # 1. Determine how many features to keep
+    if n_features_keep is not None:
+        size_features = n_features_keep
+    elif drop_rate is not None:
+        size_features = int(n_features * (1.0 - drop_rate))
+    else:
+        # Default: keep everything if no parameters are provided
+        size_features = n_features
+
+    # 2. Handle the "0 Features" Marginal Baseline
+    # We trigger this if size_features is 0 or if drop_rate was explicitly >= 1.0
+    if size_features <= 0 or (drop_rate is not None and drop_rate >= 1.0):
         dummy_X_train = X_train[:, :1] * 0.0
         processed_arrays = [arr[:, :1] * 0.0 for arr in arrays]
-        
         return (dummy_X_train, *processed_arrays)
 
-    # 2. Handle standard feature subsampling
-    rng = np.random.default_rng(seed=seed)
-    n_features = X_train.shape[1]
+    # 3. Validate and Sample
+    if size_features > n_features:
+        raise ValueError(f"n_features_keep ({size_features}) cannot be greater than total features ({n_features})")
 
     assert all(arr.shape[1] == n_features for arr in arrays), (
         "All input arrays must have the same number of features (shape[1])."
     )
     
-    # Calculate how many features to KEEP. 
-    size_features = max(1, int(n_features * (1 - drop_rate)))
-    
+    rng = np.random.default_rng(seed=seed)
     feature_idx = rng.choice(n_features, size=size_features, replace=False)
     
+    # Apply selection to X_train and all auxiliary arrays
     processed_arrays = [arr[:, feature_idx] for arr in arrays]
 
     return (X_train[:, feature_idx], *processed_arrays)
 
-def subsample_targets_per_instance(y_train, num_samples_per_instance, seed_samples_per_instance):
+def subsample_targets_per_instance(y_train, num_samples_per_instance, seed):
     """
     Subsamples a specified number of samples per instance from the training data independently per row.
     
@@ -442,7 +470,7 @@ def subsample_targets_per_instance(y_train, num_samples_per_instance, seed_sampl
     Returns:
         y_train_subsampled: (n_instances, num_samples_per_instance) - The subsampled training labels.
     """
-    rng = np.random.default_rng(seed=seed_samples_per_instance)
+    rng = np.random.default_rng(seed=seed)
     
     # Generate a matrix of random floats with the same shape as y_train
     rand_matrix = rng.random(y_train.shape)

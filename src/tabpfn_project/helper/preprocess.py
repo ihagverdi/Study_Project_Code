@@ -125,27 +125,35 @@ def del_constant_features(X_train, *arrays):
     
     return X_train_filtered, *filtered_arrays
 
-def Z_score_features(X_train, *arrays, scal="meanstd"):
+def preprocess_feats(X_train, *arrays, threshold=1e-9):
     """
-    Preprocesses training data and applies the same transformation to any number of 
+    Preprocesses (del constant feats + z-score) training data and applies the same transformation to any number of 
     additional arrays (validation, test, etc).
     :returns: tuple of processed arrays, with training data first
     """
-    X_train = X_train.copy()
-    assert scal == "meanstd", "Only 'meanstd' scaling is currently implemented."
+    constant_mask = np.ptp(X_train, axis=0) <= threshold
+    
+    # Invert mask to get columns to keep
+    cols_to_keep = ~constant_mask
+
+    if not np.any(cols_to_keep):
+        cols_to_keep[0] = True
+    
+    # Filter X_train and other arrays
+    X_train_filtered = X_train[:, cols_to_keep]    
+    filtered_arrays = [arr[:, cols_to_keep] for arr in arrays]
     
     # Calculate scaling parameters from training data
-    mean_ = X_train.mean(axis=0)
-    std_ = X_train.std(axis=0)
-    
-    # Safety: prevent division by zero if a feature has 0 variance 
-    std_[std_ == 0] = 1.0
+    mean_ = X_train_filtered.mean(axis=0)
+    std_ = X_train_filtered.std(axis=0)
+
+    std_[std_ < threshold] = 1.0
     
     # Apply to training data
-    X_train = (X_train - mean_) / std_
+    X_train_filtered = (X_train_filtered - mean_) / std_
     
     # Apply to other arrays
-    processed_arrays = [(arr - mean_) / std_ for arr in arrays]
+    filtered_arrays = [(arr - mean_) / std_ for arr in filtered_arrays]
 
     # Return training data + unpacked processed arrays
-    return (X_train, *processed_arrays)
+    return (X_train_filtered, *filtered_arrays)

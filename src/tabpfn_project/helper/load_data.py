@@ -49,7 +49,6 @@ def load_features(fl_name):
 def load_distnet_data(scenario_name, fold) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     loads the data for the specified scenario and fold from the distnet data directory.
-    :param distnet_data_dir: the directory where the distnet data is stored
     :param scenario_name: the name of the scenario to load
     :param fold: the fold to load (0-9)
     :return: X_train, X_test, y_train, y_test
@@ -61,7 +60,7 @@ def load_distnet_data(scenario_name, fold) -> Tuple[np.ndarray, np.ndarray, np.n
     
     # Get CV splits
     kf = KFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE)
-    splits = list(kf.split(np.arange(features.shape[0])))
+    splits = list(kf.split(np.arange(runtimes.shape[0])))
     train_idx, test_idx = splits[fold]  # process the specified fold
 
     return features[train_idx], features[test_idx], runtimes[train_idx], runtimes[test_idx]
