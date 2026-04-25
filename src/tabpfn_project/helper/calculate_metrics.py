@@ -5,7 +5,6 @@ from tabpfn_project.helper.utils import TargetScale
 def calculate_metrics_distnet(
     y_test_original, y_preds, *, device, target_scale, y_scaler, N_grid_points,
 ):
-    assert target_scale in ["max", "log"], "target_scale must be 'max' or 'log'"
 
     y_test_original = torch.as_tensor(y_test_original, dtype=torch.float32, device=device)
     z_test_original = torch.log1p(y_test_original)
@@ -13,11 +12,11 @@ def calculate_metrics_distnet(
     y_preds = torch.as_tensor(y_preds, dtype=torch.float32, device=device)
     y_scaler = torch.as_tensor(y_scaler, dtype=torch.float32, device=device) if y_scaler is not None else torch.tensor(1.0, device=device)
 
-    if target_scale == "max":
+    if target_scale == TargetScale.MAX:
         mu = torch.log(y_preds[:, 1]).unsqueeze(1)
         sigma = y_preds[:, 0].unsqueeze(1)
         dist = torch.distributions.LogNormal(loc=mu, scale=sigma)
-    else:
+    elif target_scale == TargetScale.LOG:
         mu = y_preds[:, 0].unsqueeze(1)
         sigma = y_preds[:, 1].unsqueeze(1)
         dist = torch.distributions.Normal(loc=mu, scale=sigma)
@@ -28,9 +27,9 @@ def calculate_metrics_distnet(
 
     p_min, p_max = torch.tensor(0.0001, device=device), torch.tensor(0.9999, device=device)
 
-    if target_scale == "max":
+    if target_scale == TargetScale.MAX:
         min_z_model, max_z_model = torch.log1p(dist.icdf(p_min) / y_scaler), torch.log1p(dist.icdf(p_max) / y_scaler)
-    else:
+    elif target_scale == TargetScale.LOG:
         min_z_model, max_z_model = dist.icdf(p_min), dist.icdf(p_max)
 
     # 2. Grid and Integration
@@ -43,9 +42,9 @@ def calculate_metrics_distnet(
     indicator = (z_test_original.unsqueeze(1) <= z_grid.unsqueeze(2)).float()
     F_emp = indicator.mean(dim=2)  # Empirical CDF at grid points
     
-    if target_scale == "max":
+    if target_scale == TargetScale.MAX:
         F_model = dist.cdf((torch.expm1(z_grid) * y_scaler).clamp(min=0))
-    else:
+    elif target_scale == TargetScale.LOG:
         F_model = dist.cdf(z_grid)
 
     assert F_emp.shape == F_model.shape == (y_test_original.shape[0], N_grid_points), "CDF shapes must match (N_instances, N_grid_points)"
@@ -53,13 +52,14 @@ def calculate_metrics_distnet(
     all_crps, all_w1, all_ks = _integrate_distribution_metrics(z_grid, F_emp, F_model, z_test_original, device)
 
     # 3. NLLH with Jacobian and Bias
-    if target_scale == "max":
-        y_test_scaled = y_test_original * y_scaler
-        llh = dist.log_prob(y_test_scaled).clamp(min=MIN_CLAMP_LLH)
+    clamp_val = torch.log(torch.tensor(LLH_EPSILON, device=device))
+    if target_scale == TargetScale.MAX:
+        llh = dist.log_prob(y_test_original * y_scaler).clamp(min=clamp_val)
         llh += z_test_original  # Jacobian correction
         bias = -torch.log(torch.max(z_test_original, dim=1)[0]) - torch.log(y_scaler)
-    else:
-        llh = dist.log_prob(z_test_original).clamp(min=MIN_CLAMP_LLH)
+
+    elif target_scale == TargetScale.LOG:
+        llh = dist.log_prob(z_test_original).clamp(min=clamp_val)
         bias = -torch.log(torch.max(z_test_original, dim=1)[0])
 
     all_nllh = -llh.mean(dim=1) + bias

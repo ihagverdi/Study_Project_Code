@@ -22,39 +22,48 @@ class BaseModelHandler:
         raise NotImplementedError
 
 class DistNetHandler(BaseModelHandler):
-    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
+    def run(self, cfg: ExperimentConfig, X_train_flat: np.ndarray, X_test: np.ndarray, y_train_flat: np.ndarray, y_test: np.ndarray, train_group_ids_flat: np.ndarray) -> Dict:
         from tabpfn_project.helper.distnet_lognormal import DistNetModel
         from tabpfn_project.helper.calculate_metrics import calculate_metrics_distnet
         from sklearn.model_selection import GroupShuffleSplit
         from tabpfn_project.globals import DISTNET_N_EPOCHS, DISTNET_BATCH_SIZE, DISTNET_WCT, DISTNET_ES_PATIENCE
         
-        assert cfg.target_scale in ['max', 'log'], "Invalid target_scale for DistNet. Only 'max' and 'log' are supported."
-        assert instance_ids is not None, "instance_ids must be provided to prevent data leakage."
-
+        assert cfg.target_scale.value in ['max', 'log'], "Invalid target_scale for DistNet. Only 'max' and 'log' are supported."
         device = torch.device('cuda' if (torch.cuda.is_available() and not cfg.use_cpu) else 'cpu')
-        best_epoch, y_scale = None, None
+        best_epoch, y_scaler = None, None
+        X_val, y_val, y_train_scaled = None, None, None
         # Early Stopping Logic
         if cfg.early_stopping:
             gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=RANDOM_STATE)
-            tr_idx, val_idx = next(gss.split(X_train, y_train, groups=instance_ids))
+            tr_idx, val_idx = next(gss.split(X_train_flat, y_train_flat, groups=train_group_ids_flat))
             
-            X_tr, X_val = X_train[tr_idx], X_train[val_idx]
-            y_tr, y_val = y_train[tr_idx], y_train[val_idx]
-            
-            X_tr, X_val, X_test = Z_score_features(X_tr, X_val, X_test, scal="meanstd")
-            y_tr, y_val, y_scale = (max_scaling(y_tr, y_val) if cfg.target_scale == 'max' else (*log1p_scaling(y_tr, y_val), None))
+            X_tr, X_val = X_train_flat[tr_idx], X_train_flat[val_idx]
+            y_tr, y_val = y_train_flat[tr_idx], y_train_flat[val_idx]
+            ids_tr, ids_val = train_group_ids_flat[tr_idx], train_group_ids_flat[val_idx]
+
+            X_tr, X_val, X_test = preprocess_feats(X_tr, X_val, X_test)
+
+            if cfg.target_scale == TargetScale.LOG:
+                y_tr_scaled, y_val_scaled = log1p_scaling(y_tr, y_val)
+            elif cfg.target_scale == TargetScale.MAX:
+                y_tr_scaled, y_val_scaled, y_scaler = max_scaling(y_tr, y_val)
+                
             model = DistNetModel(model_target_scale=cfg.target_scale, n_input_features=X_tr.shape[1], n_epochs=DISTNET_N_EPOCHS, batch_size=DISTNET_BATCH_SIZE, 
-                                 wc_time_limit=DISTNET_WCT, X_valid=X_val, y_valid=y_val, 
+                                 wc_time_limit=DISTNET_WCT, X_valid=X_val, y_valid=y_val_scaled, 
                                  early_stopping=True, early_stopping_patience=DISTNET_ES_PATIENCE, random_state=RANDOM_STATE)
-            X_train, y_train = X_tr, y_tr
+            X_train_flat, y_train_scaled, train_group_ids_flat = X_tr, y_tr_scaled, ids_tr
         else:
-            X_train, X_test = Z_score_features(X_train, X_test, scal="meanstd")
-            y_train, y_scale = (max_scaling(y_train) if cfg.target_scale == 'max' else (*log1p_scaling(y_train), None))
-            model = DistNetModel(model_target_scale=cfg.target_scale, n_input_features=X_train.shape[1], n_epochs=DISTNET_N_EPOCHS, batch_size=DISTNET_BATCH_SIZE, 
-                                 wc_time_limit=DISTNET_WCT, early_stopping=False, random_state=RANDOM_STATE)
+            X_train_flat, X_test = preprocess_feats(X_train_flat, X_test)
+
+            if cfg.target_scale == TargetScale.LOG:
+                y_train_scaled = log1p_scaling(y_train_flat)[0]
+            elif cfg.target_scale == TargetScale.MAX:
+                y_train_scaled, y_scaler = max_scaling(y_train_flat)
+
+            model = DistNetModel(model_target_scale=cfg.target_scale, n_input_features=X_train_flat.shape[1], n_epochs=DISTNET_N_EPOCHS, batch_size=DISTNET_BATCH_SIZE, wc_time_limit=DISTNET_WCT, early_stopping=False, random_state=RANDOM_STATE)
 
         fit_start = time.perf_counter()
-        model.train(X_train, y_train)
+        model.train(X_train_flat, y_train_scaled)
         fit_time = time.perf_counter() - fit_start
         
         if cfg.early_stopping: best_epoch = model.best_epoch
@@ -64,15 +73,15 @@ class DistNetHandler(BaseModelHandler):
         pred_time = time.perf_counter() - pred_start
 
         metrics_sum, inst_sum = calculate_metrics_distnet(
-            y_test, y_pred, device=device, target_scale=cfg.target_scale, y_scaler=y_scale, N_grid_points=N_GRID_POINTS
-        ); print(f"DistNet Metrics Summary scale={cfg.target_scale}: {metrics_sum}")
-
+            y_test, y_pred, device=device, target_scale=cfg.target_scale, y_scaler=y_scaler, N_grid_points=N_GRID_POINTS
+        )
+        
         return {
             'y_test_preds': y_pred,
             'result_metrics': {'metrics_summary': metrics_sum, 'instance_summary': inst_sum},
             'model_specific_info': {
                 'model_config': model.model.state_dict(), 'best_epoch': best_epoch, 'fit_time': fit_time, 
-                'predict_time': pred_time, 'y_scale': y_scale, 'n_epochs': DISTNET_N_EPOCHS
+                'predict_time': pred_time, 'y_scaler': y_scaler, 'n_samples': X_train_flat.shape[0], 'n_features': X_train_flat.shape[1], 'train_group_ids': train_group_ids_flat, 'n_samples_val': X_val.shape[0] if X_val is not None else None, 'n_features_val': X_val.shape[1] if X_val is not None else None
             }
         }
 

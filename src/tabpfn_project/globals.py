@@ -13,8 +13,8 @@ DISTNET_SCENARIOS = list(get_sc_dict(DISTNET_DATA_DIR).keys())
 
 DISTNET_N_EPOCHS = 1000
 DISTNET_BATCH_SIZE = 16
-DISTNET_WCT = 3540
-DISTNET_ES_PATIENCE = 50
+DISTNET_WCT = 3600
+DISTNET_ES_PATIENCE = 20
 
 
 MODELS = ["distnet", "tabpfn", "bayesian_distnet", "random_forest", "lognormal"]

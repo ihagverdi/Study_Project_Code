@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+from tabpfn_project.helper.utils import TargetScale
+
 def set_seed(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -78,9 +80,8 @@ class DistNetModel:
         X_valid=None,
         y_valid=None,
         early_stopping=False,
-        early_stopping_patience=50,
+        early_stopping_patience=20,
     ):
-        assert model_target_scale in ['max', 'log'], "Invalid target_scale for DistNet. Only 'max' and 'log' are supported."
         set_seed(random_state)
         self.model_target_scale = model_target_scale
         self.n_epochs = n_epochs
@@ -158,7 +159,7 @@ class DistNetModel:
         n_samples = X.size(0)
         start_time = time.time()
 
-        criterion = loss_fn_log if self.model_target_scale == 'log' else loss_fn_max
+        criterion = loss_fn_log if self.model_target_scale == TargetScale.LOG else loss_fn_max
         
         for epoch in range(1, self.n_epochs + 1):
             epoch_loss = 0.0
