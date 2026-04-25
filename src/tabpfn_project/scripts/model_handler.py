@@ -403,12 +403,6 @@ class RFHandler(BaseModelHandler):
         metrics_sum, inst_sum = calculate_metrics_random_forest(
             y_test, (means, vars), device=device, N_grid_points=N_GRID_POINTS
         )
-        
-        print(f"="*20)
-        for k,v in metrics_sum.items():
-            print(f"{k}: {v:.4f}")
-        print(f"="*20)
-        print(f"RF Fit Time: {fit_time:.2f} seconds, Predict Time: {pred_time:.2f} seconds")
 
         return {
             'y_test_preds': [means, vars],
