@@ -253,14 +253,14 @@ class LognormalHandler(BaseModelHandler):
         }
 
 class RFHandler(BaseModelHandler):
-    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
+    def run(self, cfg: ExperimentConfig, X_train_flat: np.ndarray, X_test: np.ndarray, y_train_flat: np.ndarray, y_test: np.ndarray, train_group_ids_flat: np.ndarray):
         from tabpfn_project.helper.random_forest import RuntimePredictionRandomForest
         from sklearn.model_selection import GroupKFold
         from tabpfn_project.helper.calculate_metrics import calculate_metrics_random_forest
         from tabpfn_project.globals import MAX_HPO_TRIALS, MAX_HPO_WCT
 
         device = torch.device("cuda" if (torch.cuda.is_available() and not getattr(cfg, 'use_cpu', False)) else "cpu")
-        assert cfg.target_scale == 'log', "Target scale must be 'log'"
+        assert cfg.target_scale == TargetScale.LOG, "Target scale must be 'log'"
         
         best_params = dict()
         num_unique_configs = None
@@ -269,13 +269,13 @@ class RFHandler(BaseModelHandler):
         if cfg.do_hpo:
             smac_folder_name = f"rf_hpo_{generate_experiment_id(cfg)}"
             cs = ConfigurationSpace()
-            # TabArena defaults for RF HPO Search Space
+            # TabArena inspired defaults for RF HPO Search Space
             cs.add([
-                Constant("n_estimators", 50),
+                Integer("n_estimators", (10, 100), default=10),
                 Float("max_features", (0.4, 1.0), default=0.5),
                 Float("max_samples", (0.5, 1.0), default=1.0),
                 Float("min_impurity_decrease", (1e-5, 1e-3), log=True),
-                Integer("min_samples_split", (2, 5), log=True, default=5),
+                Integer("min_samples_split", (2, 6), log=True, default=5),
                 Float("var_min", (1e-5, 1e-1), log=True, default=0.01),
                 Categorical("bootstrap", [True, False], default=False)
             ])
@@ -292,19 +292,17 @@ class RFHandler(BaseModelHandler):
                 if not bootstrap_val:
                     max_samples_val = None  # Ensure max_samples is ignored when bootstrap=False
 
-                gkf = GroupKFold(n_splits=3)
+                gkf = GroupKFold(n_splits=5)
                 metrics_per_fold =[]
-                
-                for in_train_idx, in_val_idx in gkf.split(X_train, y_train, groups=instance_ids):
-                    X_in_train_raw_split = X_train[in_train_idx]
-                    X_in_val_raw_split = X_train[in_val_idx]
+                for in_train_idx, in_val_idx in gkf.split(X_train_flat, y_train_flat, groups=train_group_ids_flat):
+                    X_in_train_raw_split = X_train_flat[in_train_idx]
+                    X_in_val_raw_split = X_train_flat[in_val_idx]
                     
-                    y_in_train = y_train[in_train_idx]
-                    y_in_val = y_train[in_val_idx]
+                    y_in_train = y_train_flat[in_train_idx]
+                    y_in_val = y_train_flat[in_val_idx]
                     
-                    # 1. Preprocess purely on inner split (Leakage-Safe)
-                    X_in_train_scaled, X_in_val_scaled = Z_score_features(
-                        X_in_train_raw_split, X_in_val_raw_split, scal="meanstd"
+                    X_in_train_scaled, X_in_val_scaled = preprocess_feats(
+                        X_in_train_raw_split, X_in_val_raw_split
                     )
                     
                     # Apply log1p scaling to inner train targets
@@ -324,18 +322,18 @@ class RFHandler(BaseModelHandler):
                     model.fit(X_in_train_scaled, y_in_train_scaled)
                     
                     # 3. Direct Prediction on ALL validation rows
-                    means, vars_ = model.predict(X_in_val_scaled)
+                    means, vars = model.predict(X_in_val_scaled)
                     
                     m_t = torch.as_tensor(means, dtype=torch.float32, device=device)
-                    v_t = torch.as_tensor(vars_, dtype=torch.float32, device=device)
+                    v_t = torch.as_tensor(vars, dtype=torch.float32, device=device)
                     
-                    # 4. Compute NLL strictly per prediction & aggregate (No bias correction)
                     z_in_val = torch.log1p(torch.as_tensor(y_in_val, dtype=torch.float32, device=device))
                     
                     dist = torch.distributions.Normal(loc=m_t, scale=torch.sqrt(v_t))
-                    llh = dist.log_prob(z_in_val).clamp(min=MIN_CLAMP_LLH)
+
+                    clamp_val = torch.log(torch.tensor(LLH_EPSILON, device=device))
+                    llh = dist.log_prob(z_in_val).clamp(min=clamp_val)
                     
-                    # Compute mean NLL over the validation set
                     nllh = -llh.mean()
                     metrics_per_fold.append(nllh.item())
                     
@@ -361,36 +359,36 @@ class RFHandler(BaseModelHandler):
             print(f"HPO Trials - Submitted: {num_submitted_trials}, Finished: {num_finished_trials}, Unique Configs Evaluated: {num_unique_configs}")
 
         else:
-            # Paper's default RF parameters for runtime prediction (with log-scaling) - No HPO
+            # Paper's default RF parameters for runtime prediction (with log-scaling)
             best_params = {
                 "n_estimators": 10,
                 "max_features": 0.5,
                 "min_samples_split": 5,
-                "bootstrap": False,
                 "var_min": 0.01,
+                "bootstrap": False,
                 "max_samples": None,
                 "min_impurity_decrease": 0.0,
             }
             print(f"HPO disabled. Using default parameters: {best_params}")
 
         # --- Final Model Training ---
-        # Outer preprocessing step applied safely now that HPO is resolved
-        X_train_final, X_test_final = Z_score_features(X_train, X_test, scal="meanstd")
-        y_train_final = log1p_scaling(y_train)[0]
+        X_train_final, X_test_final = preprocess_feats(X_train_flat, X_test)
+        y_train_final = log1p_scaling(y_train_flat)[0]
 
         bootstrap_val = best_params.get("bootstrap", False)
         max_samples_val = best_params.get("max_samples", None)
         if not bootstrap_val:
             max_samples_val = None  # Ensure max_samples is ignored when bootstrap=False
+
         final_model = RuntimePredictionRandomForest(
                         random_state=RANDOM_STATE, 
                         n_estimators=best_params["n_estimators"],
                         max_features=best_params["max_features"],
                         min_samples_split=best_params["min_samples_split"],
-                        bootstrap=bootstrap_val,
                         var_min=best_params["var_min"],
+                        min_impurity_decrease=best_params["min_impurity_decrease"],
+                        bootstrap=bootstrap_val,
                         max_samples=max_samples_val,
-                        min_impurity_decrease=best_params["min_impurity_decrease"]
                     )
 
         start = time.perf_counter()
@@ -399,20 +397,21 @@ class RFHandler(BaseModelHandler):
 
         # Predict strictly on test
         pred_start = time.perf_counter()
-        means, vars_ = final_model.predict(X_test_final)
+        means, vars = final_model.predict(X_test_final)
         pred_time = time.perf_counter() - pred_start
 
         metrics_sum, inst_sum = calculate_metrics_random_forest(
-            y_test, (means, vars_), device=device, N_grid_points=N_GRID_POINTS
+            y_test, (means, vars), device=device, N_grid_points=N_GRID_POINTS
         )
         
         print(f"="*20)
         for k,v in metrics_sum.items():
             print(f"{k}: {v:.4f}")
         print(f"="*20)
+        print(f"RF Fit Time: {fit_time:.2f} seconds, Predict Time: {pred_time:.2f} seconds")
 
         return {
-            'y_test_preds': [means, vars_],
+            'y_test_preds': [means, vars],
             'result_metrics': {'metrics_summary': metrics_sum, 'instance_summary': inst_sum},
             'model_specific_info': {
                 'fit_time': fit_time, 
@@ -421,5 +420,7 @@ class RFHandler(BaseModelHandler):
                 'num_unique_configs': num_unique_configs,
                 'num_finished_trials': num_finished_trials,
                 'num_submitted_trials': num_submitted_trials,
+                'n_samples': X_train_final.shape[0],
+                'n_features': X_train_final.shape[1],
             }
         }

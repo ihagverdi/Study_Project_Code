@@ -13,14 +13,14 @@ class RuntimePredictionRandomForest(RandomForestRegressor):
     
     def __init__(
         self,
-        n_estimators=10,        # B = 10 throughout the experiments
-        max_features=0.5,       # perc = 0.5
+        n_estimators=10,
+        max_features=0.5,
         min_samples_split=5,
-        bootstrap=False,        # "using the full training set for each tree"
-        var_min=0.01,           # sigma^2_{min} = 0.01
-        criterion="squared_error", # Required to ensure tree impurity equals variance
+        bootstrap=False,
+        var_min=0.01,
+        criterion="squared_error",
         random_state=0,
-        **kwargs                # Expose remainder of scikit-learn's kwargs for full compatibility
+        **kwargs
     ):
         super().__init__(
             n_estimators=n_estimators,
@@ -97,5 +97,4 @@ class RuntimePredictionRandomForest(RandomForestRegressor):
         # Total Variance
         sigma2 = mean_of_variances + variance_of_means
         
-        # Return as (B, 1) shapes to maintain rigorous correspondence with input shapes
         return mu.reshape(-1, 1), sigma2.reshape(-1, 1)

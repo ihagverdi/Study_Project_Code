@@ -237,7 +237,7 @@ def calculate_metrics_lognormal(
 def calculate_metrics_random_forest(
     y_test_original, preds, *, device, N_grid_points,
 ):
-    assert (preds[0].ndim == preds[1].ndim == 2) and (len(preds[0]) == len(preds[1])), "Preds must be two 2D arrays of the same length (means and variances)"
+    assert (preds[0].ndim == preds[1].ndim == 2) and (len(preds[0]) == len(preds[1]) == len(y_test_original)), "Preds must be two 2D arrays of the same length (means and variances)"
     
     y_test_original = torch.as_tensor(y_test_original, dtype=torch.float32, device=device)
     z_test_original = torch.log1p(y_test_original)
@@ -266,7 +266,8 @@ def calculate_metrics_random_forest(
     
     all_crps, all_w1, all_ks = _integrate_distribution_metrics(z_grid, F_emp, F_model, z_test_original, device)
 
-    llh = dist.log_prob(z_test_original).clamp(min=MIN_CLAMP_LLH)
+    clamp_val = torch.log(torch.tensor(LLH_EPSILON, device=device))
+    llh = dist.log_prob(z_test_original).clamp(min=clamp_val)
     bias = -torch.log(torch.max(z_test_original, dim=1)[0])
     all_nllh = -llh.mean(dim=1) + bias
 
