@@ -146,6 +146,52 @@ class WindowsPathUnpickler(pickle.Unpickler):
             return pathlib.WindowsPath
         return super().find_class(module, name)
 
+def analyze_optimal_context(
+    model_results_path,
+    scenarios,
+    metric='NLLH',
+    output_csv_path=None,
+    display_results=True
+):
+    """
+    Analyze optimal context sizes across scenarios and optionally save results.
+    
+    Args:
+        model_results_path: Path to pickle file containing model results
+        scenarios: List of scenario names to analyze
+        metric: Metric to optimize for (default: 'NLLH')
+        output_csv_path: Optional path to save results as CSV
+        display_results: Whether to display results while analyzing (default: True)
+    
+    Returns:
+        pd.DataFrame: Results with columns 'scenario', 'metric', 'optimal_context'
+    """
+    import pickle
+    import pandas as pd
+    from tabpfn_project.helper.utils import find_optimal_context
+    
+    with open(model_results_path, "rb") as f:
+        model_results = pickle.load(f)
+    
+    rows = []
+    for scenario in scenarios:
+        optimal_context, summary_df = find_optimal_context(
+            model_results, scenario, metric, display_results=display_results
+        )
+        rows.append({
+            "scenario": scenario,
+            "metric": metric,
+            "optimal_context": optimal_context,
+        })
+    
+    results_df = pd.DataFrame(rows).sort_values("scenario").reset_index(drop=True)
+    
+    if output_csv_path:
+        results_df.to_csv(output_csv_path, index=False)
+        print(f"Saved CSV to: {output_csv_path}")
+    
+    return results_df
+
 def find_optimal_context(results_list, scenario, target_metric, alpha=0.05, display_results=True):
     """
     Rigorously determines the optimal context size using the Principle of Parsimony 
@@ -176,7 +222,7 @@ def find_optimal_context(results_list, scenario, target_metric, alpha=0.05, disp
             records.append({
                 'context_size': run['context_size'],
                 'fold': run['fold'],
-                'seed': run['context_seed'],
+                'seed': run['seed_context_size'],
                 'score': run_score
             })
             
@@ -512,194 +558,73 @@ def fetch_save_dict(
     Build and save a normalized list of experiment results filtered by model/scenario
     and optional key/value filter, aligned with current metadata produced by scripts/main.py
     and scripts/model_handler.py.
-
-    Notes:
-    - Keeps backward-compat aliases used by older notebooks.
-    - Resolves overlap fields explicitly (HPO/memory metrics).
-    - Preserves unknown future fields in dedicated pass-through buckets.
     """
     experiment_results_lst = []
-
-    # Core top-level fields produced by scripts/main.py (+ merged model outputs).
-    # Keep this list explicit so schema drift is visible and controlled.
-    expected_top_level = {
-        "model_name",
-        "scenario",
-        "fold",
-        "seed_context_size",
-        "seed_feature_drop_rate",
-        "seed_samples_per_instance",
-        "jitter_x",
-        "jitter_val",
-        "rand_extend_x",
-        "n_rand_cols",
-        "subsample_from_unflattened",
-        "feature_drop_rate",
-        "context_size",
-        "target_scale",
-        "subsample_method",
-        "num_samples_per_instance",
-        "use_cpu",
-        "save_dir",
-        "n_samples",
-        "n_features",
-        "instance_ids",
-        "feature_agnostic",
-        "remove_duplicates",
-        "oracle",
-        "do_hpo",
-        "y_test_preds",
-        "result_metrics",
-        "model_specific_info",
-    }
-
-    # Legacy/optional top-level fields that may appear in older or alternate runs.
-    optional_top_level = {
-        "early_stopping",
-        "hpo_time",
-        "hpo_results",
-    }
-
-    # Explicitly normalized keys from model_specific_info across handlers.
-    normalized_model_specific_keys = {
-        "fit_time",
-        "predict_time",
-        "mem_time_stats",
-        "gpu_metrics",
-        "y_scale",
-        "best_epoch",
-        "val_batch_size",
-        "n_epochs",
-        "model_config",
-        "best_hyperparameters",
-        # RF HPO run diagnostics
-        "num_unique_configs",
-        "num_finished_trials",
-        "num_submitted_trials",
-        # Optional legacy/alt locations
-        "hpo_time",
-        "hpo_results",
-    }
-
-    schema_warning_count = 0
 
     for fpath in sorted(metadata_dir.glob("*.pkl")):
         results_dict = load_pickle(fpath)
 
+        # Apply filters
         if results_dict.get("model_name") != model_name:
             continue
-
         if scenario is not None and results_dict.get("scenario") != scenario:
             continue
-
         if search_key is not None and results_dict.get(search_key) != search_value:
             continue
 
-        
         result_metrics = results_dict.get("result_metrics") or {}
         model_specific_info = results_dict.get("model_specific_info") or {}
 
-        # Explicit overlap resolution:
-        # 1) hpo_results priority: top-level -> model_specific_info.hpo_results -> best_hyperparameters
-        hpo_results = results_dict.get("hpo_results")
-        if hpo_results is None:
-            hpo_results = model_specific_info.get("hpo_results")
-        if hpo_results is None:
-            hpo_results = model_specific_info.get("best_hyperparameters")
-
-        # 2) hpo_time priority: top-level -> model_specific_info
-        hpo_time = results_dict.get("hpo_time")
-        if hpo_time is None:
-            hpo_time = model_specific_info.get("hpo_time")
-
-        # 3) memory/time compatibility:
-        #    TabPFN uses mem_time_stats; some consumers expect gpu_metrics.
-        mem_time_stats = model_specific_info.get("mem_time_stats")
-        gpu_metrics = model_specific_info.get("gpu_metrics")
-        if gpu_metrics is None:
-            gpu_metrics = mem_time_stats
-
         temp = {
-            # Normalized label used by notebooks/plots
+            # Experiment identifiers & config from main.py
             "model_name": results_dict.get("model_name"),
-
-            # Caller-side tag used in downstream aggregation scripts
             "save_name": save_name,
-
-            # Core experiment config / identifiers from top-level metadata
             "scenario": results_dict.get("scenario"),
             "fold": results_dict.get("fold"),
+            
+            # Data preprocessing parameters
             "context_size": results_dict.get("context_size"),
             "seed_context_size": results_dict.get("seed_context_size"),
             "seed_feature_drop_rate": results_dict.get("seed_feature_drop_rate"),
             "seed_samples_per_instance": results_dict.get("seed_samples_per_instance"),
             "feature_drop_rate": results_dict.get("feature_drop_rate"),
-            "target_scale": results_dict.get("target_scale"),
-            "subsample_method": results_dict.get("subsample_method"),
-            "subsample_from_unflattened": results_dict.get("subsample_from_unflattened"),
             "num_samples_per_instance": results_dict.get("num_samples_per_instance"),
-            "use_cpu": results_dict.get("use_cpu"),
-            "save_dir": results_dict.get("save_dir"),
-            "n_samples": results_dict.get("n_samples"),
-            "n_features": results_dict.get("n_features"),
-            # "instance_ids": results_dict.get("instance_ids"),
-            "feature_agnostic": results_dict.get("feature_agnostic"),
-            "remove_duplicates": results_dict.get("remove_duplicates"),
-            "oracle": results_dict.get("oracle"),
-            "do_hpo": results_dict.get("do_hpo"),
-            "early_stopping": results_dict.get("early_stopping"),
-            "hpo_time": hpo_time,
-            "hpo_results": hpo_results,
-
-            # Newly introduced main.py args that were previously omitted
+            
+            # Feature augmentation
             "jitter_x": results_dict.get("jitter_x"),
             "jitter_val": results_dict.get("jitter_val"),
             "rand_extend_x": results_dict.get("rand_extend_x"),
             "n_rand_cols": results_dict.get("n_rand_cols"),
-
-            # Current model outputs
+            
+            # Model & evaluation settings
+            "target_scale": results_dict.get("target_scale"),
+            "use_cpu": results_dict.get("use_cpu"),
+            "remove_duplicates": results_dict.get("remove_duplicates"),
+            "oracle": results_dict.get("oracle"),
+            "do_hpo": results_dict.get("do_hpo"),
+            
+            # Paths
+            "save_dir": results_dict.get("save_dir"),
+            
+            # Model outputs
             "y_test_preds": results_dict.get("y_test_preds"),
-            # "metrics_summary": result_metrics.get("metrics_summary"),
             "instance_summary": result_metrics.get("instance_summary"),
-
-            # Model-specific normalized block
+            
+            # Model-specific metrics
             "fit_time": model_specific_info.get("fit_time"),
             "predict_time": model_specific_info.get("predict_time"),
-            "mem_time_stats": mem_time_stats,
-            "gpu_metrics": gpu_metrics,
-            "y_scale": model_specific_info.get("y_scale"),
+            "mem_time_stats": model_specific_info.get("mem_time_stats"),
             "best_epoch": model_specific_info.get("best_epoch"),
-            "val_batch_size": model_specific_info.get("val_batch_size"),
             "n_epochs": model_specific_info.get("n_epochs"),
+            "y_scale": model_specific_info.get("y_scale"),
+            "y_scaler": model_specific_info.get("y_scaler"),
             "model_config": model_specific_info.get("model_config"),
+            
+            # RF-specific
             "best_hyperparameters": model_specific_info.get("best_hyperparameters"),
             "num_unique_configs": model_specific_info.get("num_unique_configs"),
             "num_finished_trials": model_specific_info.get("num_finished_trials"),
             "num_submitted_trials": model_specific_info.get("num_submitted_trials"),
-            "ensemble": model_specific_info.get("ensemble"),
-            "ensemble_size": model_specific_info.get("ensemble_size"),
-
-            # Keep raw nested blocks for forward-compat consumers
-            "result_metrics": result_metrics,
-            "model_specific_info": model_specific_info,
-
-            # Backward-compat aliases used by older notebook logic
-            "context_seed": results_dict.get("seed_context_size"),
-            "y_preds": results_dict.get("y_test_preds"),
-        }
-
-        # Extensibility: preserve future unknown keys without flattening duplicate semantics.
-        known_top = expected_top_level | optional_top_level
-        temp["extra_top_level"] = {
-            k: v
-            for k, v in results_dict.items()
-            if k not in known_top
-        }
-
-        temp["extra_model_specific_info"] = {
-            k: v
-            for k, v in model_specific_info.items()
-            if k not in normalized_model_specific_keys
         }
 
         experiment_results_lst.append(temp)
@@ -715,8 +640,3 @@ def fetch_save_dict(
         pickle.dump(experiment_results_lst, f)
 
     print(f"Saved to {save_file_path}")
-    if schema_warning_count:
-        print(
-            f"[fetch_save_dict] Completed with schema warnings in "
-            f"{schema_warning_count} metadata file(s)."
-        )

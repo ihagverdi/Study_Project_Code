@@ -16,7 +16,8 @@ def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.
         (X_train_flat, X_test, y_train_flat, y_test, train_group_ids_flat)
 
     """
-    X_train, X_test, y_train, y_test = load_distnet_data(cfg.scenario, cfg.fold)
+    do_feature_drop = cfg.feature_drop_rate is not None or cfg.n_features_keep is not None
+    X_train, X_test, y_train, y_test = load_distnet_data(cfg.scenario, cfg.fold, removeConstants=do_feature_drop)
     train_group_ids = np.arange(X_train.shape[0])
 
     # subsample targets per instance if specified
@@ -48,7 +49,7 @@ def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.
         )
     
     # feature dropping if specified
-    if cfg.feature_drop_rate is not None or cfg.n_features_keep is not None:
+    if do_feature_drop:
     
         if cfg.feature_drop_rate is not None:
             assert 0.0 <= cfg.feature_drop_rate <= 1.0, \

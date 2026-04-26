@@ -98,7 +98,7 @@ def det_transformation(X):
     max_ = np.max(X, axis=0) - min_
     return min_, max_
 
-def del_constant_features(X_train, *arrays):
+def del_constant_features(X_train, *arrays, threshold=1e-9):
     """
     Detects constant features in X_train and removes them from X_train 
     and all other provided arrays.
@@ -112,7 +112,7 @@ def del_constant_features(X_train, *arrays):
     """
     # Calculate the range (max - min) for each column
     # np.ptp returns 0 for columns where all values are identical
-    constant_mask = np.ptp(X_train, axis=0) == 0
+    constant_mask = np.ptp(X_train, axis=0) <= threshold
     
     # Invert mask to get columns to keep
     cols_to_keep = ~constant_mask

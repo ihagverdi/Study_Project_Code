@@ -4,12 +4,11 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
 # Now define all your standard project directories relative to ROOT_DIR
-DATA_DIR = ROOT_DIR / "data"
-DISTNET_DATA_DIR = DATA_DIR / "distnet_data"
+DISTNET_DATA_DIR = ROOT_DIR / "data" / "distnet_data"
 
 NOTEBOOKS_DIR = ROOT_DIR / "notebooks"
 
-EXPERIMENTS_DATA_DIR = ROOT_DIR / "experiments" / "data"
+EXPERIMENTS_DATA_DIR = ROOT_DIR / "experiments_data"
 
 RESULTS_DIR = ROOT_DIR / "results"
 

@@ -46,11 +46,12 @@ def load_features(fl_name):
             feat_dict[key] = val
     return feat_dict
 
-def load_distnet_data(scenario_name, fold) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def load_distnet_data(scenario_name, fold, removeConstants=False) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     loads the data for the specified scenario and fold from the distnet data directory.
     :param scenario_name: the name of the scenario to load
     :param fold: the fold to load (0-9)
+    :param removeConstants: whether to remove constant features (default: False)
     :return: X_train, X_test, y_train, y_test
     """
     runtimes, features, _ = get_data(scenario=scenario_name)
@@ -58,6 +59,9 @@ def load_distnet_data(scenario_name, fold) -> Tuple[np.ndarray, np.ndarray, np.n
     features = np.asarray(features)
     runtimes = np.asarray(runtimes)
     
+    if removeConstants:
+        features = preprocess.del_constant_features(features)[0]
+
     # Get CV splits
     kf = KFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE)
     splits = list(kf.split(np.arange(runtimes.shape[0])))
