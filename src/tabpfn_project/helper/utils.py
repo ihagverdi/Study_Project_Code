@@ -472,7 +472,6 @@ def subsample_features(
     """
     n_features = X_train.shape[1]
     
-    # 1. Determine how many features to keep
     if n_features_keep is not None:
         size_features = n_features_keep
     elif drop_rate is not None:
@@ -481,14 +480,16 @@ def subsample_features(
         # Default: keep everything if no parameters are provided
         size_features = n_features
 
-    # 2. Handle the "0 Features" Marginal Baseline
     # We trigger this if size_features is 0 or if drop_rate was explicitly >= 1.0
     if size_features <= 0 or (drop_rate is not None and drop_rate >= 1.0):
         dummy_X_train = X_train[:, :1] * 0.0
         processed_arrays = [arr[:, :1] * 0.0 for arr in arrays]
         return (dummy_X_train, *processed_arrays)
+    
+    if size_features == n_features:
+        # No subsampling needed, return original arrays
+        return (X_train, *arrays)
 
-    # 3. Validate and Sample
     if size_features > n_features:
         raise ValueError(f"n_features_keep ({size_features}) cannot be greater than total features ({n_features})")
 
