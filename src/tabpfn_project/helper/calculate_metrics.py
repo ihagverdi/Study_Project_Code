@@ -227,7 +227,8 @@ def calculate_metrics_lognormal(
     
     all_crps, all_w1, all_ks = _integrate_distribution_metrics(z_grid, F_emp, F_model, z_test_original, device)
 
-    llh = lognormal_dist.log_prob(y_test_original).clamp(min=MIN_CLAMP_LLH)
+    clamp_val = torch.log(torch.tensor(LLH_EPSILON, device=device))
+    llh = lognormal_dist.log_prob(y_test_original).clamp(min=clamp_val)
     llh += z_test_original  # Jacobian correction
     bias = -torch.log(torch.max(z_test_original, dim=1)[0])
     all_nllh = -llh.mean(dim=1) + bias
