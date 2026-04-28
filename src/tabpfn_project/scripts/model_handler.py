@@ -86,62 +86,58 @@ class DistNetHandler(BaseModelHandler):
         }
 
 class BayesianDistNetHandler(BaseModelHandler):
-    def run(self, cfg: ExperimentConfig, X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, instance_ids: np.ndarray):
+    def run(self, cfg: ExperimentConfig, X_train_flat: np.ndarray, X_test: np.ndarray, y_train_flat: np.ndarray, y_test: np.ndarray, train_group_ids_flat: np.ndarray):
         from tabpfn_project.helper.bayesian_distnet import BayesianDistNetModel
         from tabpfn_project.helper.calculate_metrics import calculate_metrics_distnet
         from sklearn.model_selection import GroupShuffleSplit
 
-        assert cfg.target_scale in ['max'], "Invalid target_scale for BayesianDistNet. Only 'max' is supported."
-        assert cfg.early_stopping, "Early stopping must be enabled for BayesianDistNet."
-        assert instance_ids is not None, "instance_ids must be provided to prevent data leakage."
+        assert cfg.target_scale == TargetScale.MAX, "BayesianDistNet currently only supports 'max' target scale."
+        device = torch.device('cuda' if (torch.cuda.is_available() and not cfg.use_cpu) else 'cpu')
 
-        device = torch.device('cpu')
+        if cfg.early_stopping:
+            gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=RANDOM_STATE)
+            tr_idx, val_idx = next(gss.split(X_train_flat, y_train_flat, groups=train_group_ids_flat))
+            X_tr, X_val = X_train_flat[tr_idx], X_train_flat[val_idx]
+            y_tr, y_val = y_train_flat[tr_idx], y_train_flat[val_idx]
 
-        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=RANDOM_STATE)
-        tr_idx, val_idx = next(gss.split(X_train, y_train, groups=instance_ids))
-        X_tr, X_val = X_train[tr_idx], X_train[val_idx]
-        y_tr, y_val = y_train[tr_idx], y_train[val_idx]
-
-        X_tr, X_val, X_test = Z_score_features(X_tr, X_val, X_test, scal="meanstd")
-
-        print(f"Early stopping enabled for BayesianDistNet.")
-        y_tr, y_val, y_scale = max_scaling(y_tr, y_val)
-
-        model = BayesianDistNetModel(
-            n_input_features=X_tr.shape[1],
-            X_valid=X_val,
-            y_valid=y_val,
-        )
+            X_tr, X_val, X_test = preprocess_feats(X_tr, X_val, X_test)
+            y_tr, y_val, y_scaler = max_scaling(y_tr, y_val)
+            handler = BayesianDistNetModel(n_input_features=X_tr.shape[1], device=device, X_valid=X_val, y_valid=y_val, early_stopping=True)
+        else:
+            X_tr, X_test = preprocess_feats(X_train_flat, X_test)
+            y_tr, y_scaler = max_scaling(y_train_flat)
+            handler = BayesianDistNetModel(n_input_features=X_tr.shape[1], device=device, early_stopping=False)
 
         fit_start = time.perf_counter()
-        model.train(X_tr, y_tr)
+        handler.train(X_tr, y_tr)
         fit_time = time.perf_counter() - fit_start
 
-        best_epoch = model.best_epoch
+        best_epoch = handler.best_epoch
 
         pred_start = time.perf_counter()
-        y_pred = model.predict(X_test)
+        y_pred = handler.predict(X_test)
         pred_time = time.perf_counter() - pred_start
 
         metrics_sum, inst_sum = calculate_metrics_distnet(
-            y_test, y_pred, device=device, target_scale='max', y_scaler=y_scale, N_grid_points=N_GRID_POINTS
+            y_test, y_pred, device=device, target_scale=cfg.target_scale, y_scaler=y_scaler, N_grid_points=N_GRID_POINTS
         )
         
-        print(f"BayesianDistNet Metrics Summary scale=max: {metrics_sum}")
-
-        if model.model is None:
-            raise RuntimeError("BayesianDistNet model is not initialized after training.")
+        print(f"BayesianDistNet Metrics Summary scale={cfg.target_scale.value}: {metrics_sum}")
 
         return {
             'y_test_preds': y_pred,
             'result_metrics': {'metrics_summary': metrics_sum, 'instance_summary': inst_sum},
             'model_specific_info': {
-                'model_config': model.model.state_dict(),
+                'model_config': handler.model.state_dict(),
                 'best_epoch': best_epoch,
                 'fit_time': fit_time,
                 'predict_time': pred_time,
-                'y_scale': y_scale,
-                'n_epochs': model.n_epochs,
+                'y_scaler': y_scaler,
+                'n_epochs': handler.n_epochs,
+                'n_samples': X_tr.shape[0],
+                'n_features': X_tr.shape[1],
+                'n_samples_val': X_val.shape[0] if cfg.early_stopping else None,
+                'n_features_val': X_val.shape[1] if cfg.early_stopping else None,
             }
         }
 
