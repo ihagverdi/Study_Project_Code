@@ -15,10 +15,14 @@ def calculate_metrics_distnet(
     if target_scale == TargetScale.MAX:
         mu = torch.log(y_preds[:, 1]).unsqueeze(1)
         sigma = y_preds[:, 0].unsqueeze(1)
+        invalid = ~torch.isfinite(sigma) | (sigma <= 0)
+        sigma = torch.where(invalid, torch.full_like(sigma, LLH_EPSILON), sigma)
         dist = torch.distributions.LogNormal(loc=mu, scale=sigma)
     elif target_scale == TargetScale.LOG:
         mu = y_preds[:, 0].unsqueeze(1)
         sigma = y_preds[:, 1].unsqueeze(1)
+        invalid = ~torch.isfinite(sigma) | (sigma <= 0)
+        sigma = torch.where(invalid, torch.full_like(sigma, LLH_EPSILON), sigma)
         dist = torch.distributions.Normal(loc=mu, scale=sigma)
 
     # 1. Bounds
