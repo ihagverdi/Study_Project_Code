@@ -590,6 +590,7 @@ def fetch_save_dict(
             "seed_samples_per_instance": results_dict.get("seed_samples_per_instance"),
             "feature_drop_rate": results_dict.get("feature_drop_rate"),
             "num_samples_per_instance": results_dict.get("num_samples_per_instance"),
+            "n_features_keep": results_dict.get("n_features_keep"),
             
             # Feature augmentation
             "jitter_x": results_dict.get("jitter_x"),

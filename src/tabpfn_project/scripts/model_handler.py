@@ -267,11 +267,11 @@ class RFHandler(BaseModelHandler):
             cs = ConfigurationSpace()
             # TabArena inspired defaults for RF HPO Search Space
             cs.add([
-                Integer("n_estimators", (10, 100), default=10),
+                Constant("n_estimators", 50),
                 Float("max_features", (0.4, 1.0), default=0.5),
                 Float("max_samples", (0.5, 1.0), default=1.0),
                 Float("min_impurity_decrease", (1e-5, 1e-3), log=True),
-                Integer("min_samples_split", (2, 6), log=True, default=5),
+                Integer("min_samples_split", (2, 5), log=True, default=5),
                 Float("var_min", (1e-5, 1e-1), log=True, default=0.01),
                 Categorical("bootstrap", [True, False], default=False)
             ])
@@ -288,7 +288,7 @@ class RFHandler(BaseModelHandler):
                 if not bootstrap_val:
                     max_samples_val = None  # Ensure max_samples is ignored when bootstrap=False
 
-                gkf = GroupKFold(n_splits=5)
+                gkf = GroupKFold(n_splits=3)
                 metrics_per_fold =[]
                 for in_train_idx, in_val_idx in gkf.split(X_train_flat, y_train_flat, groups=train_group_ids_flat):
                     X_in_train_raw_split = X_train_flat[in_train_idx]
@@ -355,12 +355,12 @@ class RFHandler(BaseModelHandler):
             print(f"HPO Trials - Submitted: {num_submitted_trials}, Finished: {num_finished_trials}, Unique Configs Evaluated: {num_unique_configs}")
 
         else:
-            # Paper's default RF parameters for runtime prediction (with log-scaling)
+            # Default RF parameters for runtime prediction (with log-scaling)
             best_params = {
-                "n_estimators": 10,
+                "n_estimators": 50,
                 "max_features": 0.5,
                 "min_samples_split": 5,
-                "var_min": 0.01,
+                "var_min": 1e-6,
                 "bootstrap": False,
                 "max_samples": None,
                 "min_impurity_decrease": 0.0,

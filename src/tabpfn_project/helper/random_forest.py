@@ -13,11 +13,11 @@ class RuntimePredictionRandomForest(RandomForestRegressor):
     
     def __init__(
         self,
-        n_estimators=10,
+        n_estimators=50,
         max_features=0.5,
         min_samples_split=5,
         bootstrap=False,
-        var_min=0.01,
+        var_min=1e-6,
         criterion="squared_error",
         random_state=0,
         **kwargs
