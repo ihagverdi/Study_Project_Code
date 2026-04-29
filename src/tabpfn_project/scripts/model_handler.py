@@ -272,7 +272,7 @@ class RFHandler(BaseModelHandler):
                 Float("max_samples", (0.5, 1.0), default=1.0),
                 Float("min_impurity_decrease", (1e-5, 1e-3), log=True),
                 Integer("min_samples_split", (2, 5), log=True, default=5),
-                Float("var_min", (1e-5, 1e-1), log=True, default=0.01),
+                Float("var_min", (1e-6, 1e-1), log=True, default=0.01),
                 Categorical("bootstrap", [True, False], default=False)
             ])
             condition = EqualsCondition(cs["max_samples"], cs["bootstrap"], True)
@@ -357,10 +357,10 @@ class RFHandler(BaseModelHandler):
         else:
             # Default RF parameters for runtime prediction (with log-scaling)
             best_params = {
-                "n_estimators": 50,
+                "n_estimators": 50 if cfg.rf_new_default else 10,
                 "max_features": 0.5,
                 "min_samples_split": 5,
-                "var_min": 1e-6,
+                "var_min": 1e-6 if cfg.rf_new_default else 0.01,
                 "bootstrap": False,
                 "max_samples": None,
                 "min_impurity_decrease": 0.0,
@@ -412,5 +412,6 @@ class RFHandler(BaseModelHandler):
                 'num_submitted_trials': num_submitted_trials,
                 'n_samples': X_train_final.shape[0],
                 'n_features': X_train_final.shape[1],
+                'rf_new_default': cfg.rf_new_default,
             }
         }

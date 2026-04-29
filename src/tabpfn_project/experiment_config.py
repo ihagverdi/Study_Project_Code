@@ -29,3 +29,4 @@ class ExperimentConfig:
     do_hpo: bool = False
     oracle: bool = False
     remove_duplicates: bool = False
+    rf_new_default: bool = False

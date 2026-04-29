@@ -91,6 +91,8 @@ if __name__ == "__main__":
     parser.add_argument("--early_stopping", action="store_true")
     parser.add_argument("--use_cpu", action="store_true")
     parser.add_argument("--do_hpo", action="store_true")
+    parser.add_argument("--rf_new_default", action="store_true")
+
 
     args = parser.parse_args()
     config = ExperimentConfig(
@@ -98,7 +100,7 @@ if __name__ == "__main__":
         num_samples_per_instance=args.num_samples_per_instance, context_size=args.context_size,
         use_cpu=args.use_cpu, target_scale=TargetScale.from_str(args.target_scale),
         subsample_unflattened=args.subsample_unflattened, early_stopping=args.early_stopping,
-        seed_context_size=args.seed_context_size, seed_feature_drop_rate=args.seed_feature_drop_rate, feature_drop_rate=args.feature_drop_rate, seed_samples_per_instance=args.seed_samples_per_instance, do_hpo=args.do_hpo, oracle=args.oracle, remove_duplicates=args.remove_duplicates, jitter_x=args.jitter_x, rand_extend_x=args.rand_extend_x, n_rand_cols=args.n_rand_cols, jitter_val=args.jitter_val, n_features_keep=args.n_features_keep
+        seed_context_size=args.seed_context_size, seed_feature_drop_rate=args.seed_feature_drop_rate, feature_drop_rate=args.feature_drop_rate, seed_samples_per_instance=args.seed_samples_per_instance, do_hpo=args.do_hpo, oracle=args.oracle, remove_duplicates=args.remove_duplicates, jitter_x=args.jitter_x, rand_extend_x=args.rand_extend_x, n_rand_cols=args.n_rand_cols, jitter_val=args.jitter_val, n_features_keep=args.n_features_keep, rf_new_default=args.rf_new_default
     )
     
     start = time.perf_counter()
