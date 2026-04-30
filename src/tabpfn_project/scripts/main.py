@@ -54,6 +54,8 @@ def train_test_model(cfg: ExperimentConfig):
         'remove_duplicates': cfg.remove_duplicates,
         'oracle': cfg.oracle,
         'do_hpo': cfg.do_hpo,
+        'train_size': (X_train_flat.shape[0], X_train_flat.shape[1]),
+        'test_size': (X_test.shape[0], X_test.shape[1]),
         **model_results
     }
 
