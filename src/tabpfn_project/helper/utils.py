@@ -591,6 +591,8 @@ def fetch_save_dict(
             "feature_drop_rate": results_dict.get("feature_drop_rate"),
             "num_samples_per_instance": results_dict.get("num_samples_per_instance"),
             "n_features_keep": results_dict.get("n_features_keep"),
+            "train_size": results_dict.get("train_size"),
+            "test_size": results_dict.get("test_size"),
             
             # Feature augmentation
             "jitter_x": results_dict.get("jitter_x"),
@@ -631,11 +633,11 @@ def fetch_save_dict(
 
         experiment_results_lst.append(temp)
 
-    scenario_label = scenario if scenario is not None else "all_scenarios"
+    scenario_label = '_' + scenario if scenario is not None else ""
     if search_key is None:
-        output_name = f"{save_name}_{scenario_label}.pkl"
+        output_name = f"{save_name}{scenario_label}.pkl"
     else:
-        output_name = f"{save_name}_{search_key}_{search_value}_{scenario_label}.pkl"
+        output_name = f"{save_name}_{search_key}_{search_value}{scenario_label}.pkl"
 
     save_file_path = results_dir / output_name
     with open(save_file_path, "wb") as f:
