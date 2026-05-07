@@ -415,3 +415,51 @@ class RFHandler(BaseModelHandler):
                 'rf_new_default': cfg.rf_new_default,
             }
         }
+
+class GPHandler(BaseModelHandler):
+    def run(self, cfg: 'ExperimentConfig', X_train_flat: np.ndarray, X_test: np.ndarray, 
+            y_train_flat: np.ndarray, y_test: np.ndarray, train_group_ids_flat: np.ndarray):
+        from sklearn.gaussian_process import GaussianProcessRegressor
+        from sklearn.gaussian_process.kernels import Matern, WhiteKernel, ConstantKernel
+        from tabpfn_project.helper.calculate_metrics import calculate_metrics_gp
+
+        assert cfg.target_scale == TargetScale.LOG, "GPHandler currently only supports 'log' target scale."
+        
+        y_train_log = log1p_scaling(y_train_flat)[0]
+        
+        X_train_scaled, X_test_scaled = preprocess_feats(X_train_flat, X_test)
+        
+        kernel = ConstantKernel(1.0, (1e-5, 1e5)) * \
+                 Matern(length_scale=1.0, length_scale_bounds=(1e-5, 1e5), nu=1.5) + \
+                 WhiteKernel(noise_level=1.0, noise_level_bounds=(1e-5, 1e5))
+        
+        model = GaussianProcessRegressor(
+            kernel=kernel, 
+            n_restarts_optimizer=3, 
+            normalize_y=True,
+            random_state=RANDOM_STATE
+        )
+        
+        print(f"Fitting Exact GP on {X_train_scaled.shape[0]} samples. This may take a while...")
+
+        fit_start = time.perf_counter()
+        model.fit(X_train_scaled, y_train_log)
+        fit_time = time.perf_counter() - fit_start
+        
+        pred_start = time.perf_counter()
+        y_pred_log_mean, y_pred_log_std = model.predict(X_test_scaled, return_std=True)
+        pred_time = time.perf_counter() - pred_start
+
+        metrics_sum, inst_sum = calculate_metrics_gp(y_test, (y_pred_log_mean, y_pred_log_std), device=torch.device('cpu'), N_grid_points=N_GRID_POINTS)
+
+
+        return {
+            'y_test_preds': [y_pred_log_mean, y_pred_log_std],
+            'result_metrics': {'metrics_summary': metrics_sum, 'instance_summary': inst_sum},
+            'model_specific_info': {
+                'fit_time': fit_time, 
+                'predict_time': pred_time,
+                'n_samples': X_train_scaled.shape[0],
+                'n_features': X_train_scaled.shape[1],
+            }
+        }

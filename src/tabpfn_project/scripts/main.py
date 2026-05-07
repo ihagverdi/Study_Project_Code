@@ -9,7 +9,7 @@ from tabpfn_project.globals import (
 )
 from tabpfn_project.helper.utils import TargetScale, generate_experiment_id
 from tabpfn_project.paths import RESULTS_DIR
-from tabpfn_project.scripts.model_handler import BayesianDistNetHandler, DistNetHandler, LognormalHandler, RFHandler, TabPFNHandler
+from tabpfn_project.scripts.model_handler import BayesianDistNetHandler, DistNetHandler, GPHandler, LognormalHandler, RFHandler, TabPFNHandler
 from tabpfn_project.scripts.prepare_data import prepare_datasets
 
 def train_test_model(cfg: ExperimentConfig):
@@ -23,7 +23,8 @@ def train_test_model(cfg: ExperimentConfig):
         'bayesian_distnet': BayesianDistNetHandler(),
         'tabpfn': TabPFNHandler(),
         'random_forest': RFHandler(),
-        'lognormal': LognormalHandler()
+        'lognormal': LognormalHandler(),
+        'gp': GPHandler()
     }
     
     if cfg.model_name not in handlers:

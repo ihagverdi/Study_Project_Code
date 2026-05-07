@@ -17,7 +17,7 @@ DISTNET_WCT = 3600
 DISTNET_ES_PATIENCE = 20
 
 
-MODELS = ["distnet", "tabpfn", "bayesian_distnet", "random_forest", "lognormal"]
+MODELS = ["distnet", "tabpfn", "bayesian_distnet", "random_forest", "lognormal", "gp"]
 TARGET_SCALES = ["log", "max", "original"]
 
 LLH_EPSILON = 1e-10

@@ -278,6 +278,43 @@ def calculate_metrics_random_forest(
 
     return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks)
 
+def calculate_metrics_gp(
+    y_test_original, preds, *, device, N_grid_points,
+):
+    y_test_original = torch.as_tensor(y_test_original, dtype=torch.float32, device=device)
+    z_test_original = torch.log1p(y_test_original)
+
+    means = torch.as_tensor(preds[0], dtype=torch.float32, device=device).view(-1, 1)
+    stds = torch.as_tensor(preds[1], dtype=torch.float32, device=device).view(-1, 1)
+
+    assert len(means) == len(y_test_original), "Preds length must match y_test_original length"
+
+    dist = torch.distributions.Normal(loc=means, scale=stds)
+
+    min_z_emp = z_test_original.min(dim=1, keepdim=True)[0]
+    max_z_emp = z_test_original.max(dim=1, keepdim=True)[0]
+
+    p_min, p_max = torch.tensor(0.0001, device=device), torch.tensor(0.9999, device=device)
+    min_z_model, max_z_model = dist.icdf(p_min), dist.icdf(p_max)
+
+    global_start = torch.minimum(min_z_emp, min_z_model)
+    global_end = torch.maximum(max_z_emp, max_z_model)
+    steps = torch.linspace(0, 1, N_grid_points, device=device).view(1, -1)
+    z_grid = global_start + steps * (global_end - global_start)
+    
+    indicator = (z_test_original.unsqueeze(1) <= z_grid.unsqueeze(2)).float()  
+    F_emp = indicator.mean(dim=2)
+    F_model = dist.cdf(z_grid)
+    
+    all_crps, all_w1, all_ks = _integrate_distribution_metrics(z_grid, F_emp, F_model, z_test_original, device)
+
+    clamp_val = torch.log(torch.tensor(LLH_EPSILON, device=device))
+    llh = dist.log_prob(z_test_original).clamp(min=clamp_val)
+    bias = -torch.log(torch.max(z_test_original, dim=1)[0])
+    all_nllh = -llh.mean(dim=1) + bias
+
+    return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks)
+
 def _compute_empirical_spread(z_test_original, device):
     """
     Calculates the exact physical distance integral of the empirical spread.
