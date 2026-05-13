@@ -19,3 +19,4 @@ smac3_output/
 *copy*
 tests.py
 archive/
+*.pdf

@@ -19,6 +19,15 @@ DISTNET_ES_PATIENCE = 20
 
 MODELS = ["distnet", "tabpfn", "bayesian_distnet", "random_forest", "lognormal", "gp"]
 TARGET_SCALES = ["log", "max", "original"]
+SCENARIOS = [
+    "clasp_factoring",
+    "saps-CVVAR",
+    "spear_qcp",
+    "yalsat_qcp",
+    "spear_swgcp",
+    "yalsat_swgcp",
+    "lpg-zeno"
+]
 
 LLH_EPSILON = 1e-10
 
