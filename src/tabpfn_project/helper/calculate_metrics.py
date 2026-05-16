@@ -68,15 +68,15 @@ def calculate_metrics_distnet(
 
     all_nllh = -llh.mean(dim=1) + bias
 
-    # RMSE Calculation (Log-Space)
-    z_emp_mean = z_test_original.mean(dim=1)
+    # RMSE Calculation (Original Space)
+    y_emp_mean = y_test_original.mean(dim=1)
     if target_scale == TargetScale.LOG:
-        z_pred_mean = mu.squeeze(1)
+        y_pred_mean = torch.expm1(mu).squeeze(1)
     elif target_scale == TargetScale.MAX:
         # dist.mean gets E[Y_scaled]. Divide by y_scaler to get E[Y]. Map to Z.
-        z_pred_mean = torch.log1p(torch.clamp(dist.mean / y_scaler, min=0.0)).squeeze(1)
+        y_pred_mean = (dist.mean / y_scaler).squeeze(1)
 
-    all_rmse = torch.abs(z_pred_mean - z_emp_mean)
+    all_rmse = torch.abs(y_pred_mean - y_emp_mean)
 
     return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_rmse)
 
@@ -214,8 +214,8 @@ def calculate_metrics_tabpfn(
         
         all_nllh.append(batch_nllh.detach().cpu())
 
-        # RMSE Calculation (Log-Space)
-        batch_z_emp_mean = batch_z_original.mean(dim=1)
+        # RMSE Calculation (Original Space)
+        batch_y_emp_mean = batch_y_original.mean(dim=1)
         
         # Calculate expected value for each model in the ensemble
         pred_means_models = []
@@ -227,15 +227,15 @@ def calculate_metrics_tabpfn(
         # Average point predictions across the ensemble
         agg_pred_mean = torch.stack(pred_means_models, dim=0).mean(dim=0)
         
-        # Map aggregated prediction to Z-space
+        # Map aggregated prediction to y-space
         if target_scale == TargetScale.LOG:
-            batch_z_pred_mean = agg_pred_mean
+            batch_y_pred_mean = torch.expm1(agg_pred_mean)
         elif target_scale == TargetScale.ORIGINAL:
-            batch_z_pred_mean = torch.log1p(torch.clamp(agg_pred_mean, min=0.0))
+            batch_y_pred_mean = agg_pred_mean
         elif target_scale == TargetScale.MAX:
-            batch_z_pred_mean = torch.log1p(torch.clamp(agg_pred_mean / y_scaler, min=0.0))
+            batch_y_pred_mean = (agg_pred_mean / y_scaler)
             
-        batch_rmse = torch.abs(batch_z_pred_mean - batch_z_emp_mean)
+        batch_rmse = torch.abs(batch_y_pred_mean - batch_y_emp_mean)
         all_rmse.append(batch_rmse.detach().cpu())
 
         instance_idx += batch_size
@@ -272,14 +272,14 @@ def calculate_metrics_lognormal(
     bias = -torch.log(torch.max(z_test_original, dim=1)[0])
     all_nllh = -llh.mean(dim=1) + bias
 
-    # RMSE Calculation (Log-Space)
-    z_emp_mean = z_test_original.mean(dim=1)
-    # Lognormal handler natively models original Y space (no scaling)
+    # RMSE Calculation (Original Space)
+    y_emp_mean = y_test_original.mean(dim=1)
     if lognormal_dist.mean.ndim > 1:
-        z_pred_mean = torch.log1p(torch.clamp(lognormal_dist.mean, min=0.0)).squeeze(1)
+        y_pred_mean = (lognormal_dist.mean).squeeze(1)
     else:
-        z_pred_mean = torch.log1p(torch.clamp(lognormal_dist.mean, min=0.0))
-    all_rmse = torch.abs(z_pred_mean - z_emp_mean)
+        y_pred_mean = lognormal_dist.mean
+    
+    all_rmse = torch.abs(y_pred_mean - y_emp_mean)
 
     return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_rmse)
 
@@ -320,10 +320,10 @@ def calculate_metrics_random_forest(
     bias = -torch.log(torch.max(z_test_original, dim=1)[0])
     all_nllh = -llh.mean(dim=1) + bias
 
-    # RMSE Calculation (Log-Space)
-    z_emp_mean = z_test_original.mean(dim=1)
-    z_pred_mean = means.squeeze(1)
-    all_rmse = torch.abs(z_pred_mean - z_emp_mean)
+    # RMSE Calculation (Original Space)
+    y_emp_mean = y_test_original.mean(dim=1)
+    y_pred_mean = torch.expm1(means).squeeze(1)
+    all_rmse = torch.abs(y_pred_mean - y_emp_mean)
 
     return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_rmse)
 
@@ -362,10 +362,10 @@ def calculate_metrics_gp(
     bias = -torch.log(torch.max(z_test_original, dim=1)[0])
     all_nllh = -llh.mean(dim=1) + bias
 
-    # RMSE Calculation (Log-Space)
-    z_emp_mean = z_test_original.mean(dim=1)
-    z_pred_mean = means.squeeze(1)
-    all_rmse = torch.abs(z_pred_mean - z_emp_mean)
+    # RMSE Calculation (Original Space)
+    y_emp_mean = y_test_original.mean(dim=1)
+    y_pred_mean = torch.expm1(means).squeeze(1)
+    all_rmse = torch.abs(y_pred_mean - y_emp_mean)
 
     return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_rmse)
 
