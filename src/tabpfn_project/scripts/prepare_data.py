@@ -4,7 +4,7 @@ from tabpfn_project.experiment_config import ExperimentConfig
 from tabpfn_project.helper.load_data import load_distnet_data
 from tabpfn_project.helper.utils import subsample_features, subsample_data, subsample_targets_per_instance
 
-def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def prepare_datasets(cfg: ExperimentConfig):
     """
     Prepares the datasets applying structural adjustments based on the provided configuration.
 
@@ -69,4 +69,4 @@ def prepare_datasets(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.
             seed=cfg.seed_feature_drop_rate
         )
 
-    return X_train_flat, X_test, y_train_flat, y_test, train_group_ids_flat
+    return y_test

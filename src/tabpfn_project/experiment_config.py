@@ -30,3 +30,4 @@ class ExperimentConfig:
     oracle: bool = False
     remove_duplicates: bool = False
     rf_new_default: bool = False
+    load_dir: Optional[str] = None
