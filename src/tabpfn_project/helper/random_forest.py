@@ -82,7 +82,7 @@ class RuntimePredictionRandomForest(RandomForestRegressor):
             sigma2_b = np.maximum(sigma2_b, self.var_min)
             sigma2_b_all[i, :] = sigma2_b
             
-        # --- Apply the Law of Total Variance (Eq. 5 in paper) ---
+        # --- Apply the Law of Total Variance ---
         
         # Mean across trees: (1 / B) * sum(mu_b)
         mu = np.mean(mu_b_all, axis=0)

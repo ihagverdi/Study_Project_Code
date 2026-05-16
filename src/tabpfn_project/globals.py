@@ -28,6 +28,12 @@ SCENARIOS = [
     "yalsat_swgcp",
     "lpg-zeno"
 ]
+METRICS = [
+    "NLLH",
+    "CRPS",
+    "Wasserstein",
+    "KS"
+]
 
 LLH_EPSILON = 1e-10
 

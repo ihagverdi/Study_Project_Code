@@ -14,9 +14,6 @@ from tabpfn_project.helper.utils import TargetScale, generate_experiment_id, sam
 from tabpfn_project.helper.y_scalers import max_scaling, log1p_scaling
 from tabpfn_project.paths import RESULTS_DIR
 
-from ConfigSpace import ConfigurationSpace, Integer, Float, Categorical, Constant, EqualsCondition
-from smac import HyperparameterOptimizationFacade, Scenario
-
 class BaseModelHandler:
     def run(self, cfg: ExperimentConfig, X_train_flat: np.ndarray, X_test: np.ndarray, y_train_flat: np.ndarray, y_test: np.ndarray, train_group_ids_flat: np.ndarray) -> Dict:
         raise NotImplementedError
@@ -254,6 +251,8 @@ class RFHandler(BaseModelHandler):
         from sklearn.model_selection import GroupKFold
         from tabpfn_project.helper.calculate_metrics import calculate_metrics_random_forest
         from tabpfn_project.globals import MAX_HPO_TRIALS, MAX_HPO_WCT
+        from ConfigSpace import ConfigurationSpace, Integer, Float, Categorical, Constant, EqualsCondition
+        from smac import HyperparameterOptimizationFacade, Scenario
 
         device = torch.device("cuda" if (torch.cuda.is_available() and not getattr(cfg, 'use_cpu', False)) else "cpu")
         assert cfg.target_scale == TargetScale.LOG, "Target scale must be 'log'"
@@ -270,9 +269,9 @@ class RFHandler(BaseModelHandler):
                 Constant("n_estimators", 50),
                 Float("max_features", (0.4, 1.0), default=0.5),
                 Float("max_samples", (0.5, 1.0), default=1.0),
-                Float("min_impurity_decrease", (1e-5, 1e-3), log=True),
+                Float("min_impurity_decrease", (1e-10, 1e-3), log=True, default=1e-10),
                 Integer("min_samples_split", (2, 5), log=True, default=5),
-                Float("var_min", (1e-6, 1e-1), log=True, default=0.01),
+                Float("var_min", (1e-6, 1e-2), log=True, default=1e-6),
                 Categorical("bootstrap", [True, False], default=False)
             ])
             condition = EqualsCondition(cs["max_samples"], cs["bootstrap"], True)

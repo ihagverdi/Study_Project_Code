@@ -20,3 +20,4 @@ smac3_output/
 tests.py
 archive/
 *.pdf
+uv.lock

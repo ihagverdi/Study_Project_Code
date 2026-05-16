@@ -1,23 +1,23 @@
 [project]
 name = "tabpfn_project"
-version = "0.1.0"
-description = "My AI Master's research project"
-requires-python = ">=3.13"
+version = "1.0.0"
+description ="Master's Project conducted at University of Freiburg by Hagverdi Ibrahimli for the AutoML Lab."
+requires-python = "==3.13.0"
 
 dependencies = [
-    "tabpfn>=7.1.0",
-    "numpy>=2.3.5",
-    "scipy>=1.17.0",
-    "scikit-learn>=1.8.0",
-    "torch>=2.10.0",
-    "torchvision>=0.25.0",
-    "matplotlib>=3.10.8",
-    "swig>=4.4.1",
-    "configspace>=1.2.2",
-    "statsmodels>=0.14.6",
-    "pytest>=9.0.2",
+    "tabpfn==7.1.0",
+    "numpy==2.3.5",
+    "scipy==1.17.0",
+    "scikit-learn==1.8.0",
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+    "matplotlib==3.10.8",
+    "swig==4.4.1",
+    "configspace==1.2.2",
+    "statsmodels==0.14.6",
+    "pytest==9.0.2",
     "smac==2.3.1",
-    "seaborn>=0.13.2",
+    "seaborn==0.13.2",
 ]
 
 [build-system]

@@ -10,6 +10,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+import seaborn as sns
 import torch
 from scipy.stats import wilcoxon
 
@@ -18,32 +19,54 @@ from enum import Enum
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.ticker import ScalarFormatter, FuncFormatter
-import matplotlib.pyplot as plt
 
 # Update global parameters for high-quality, readable plots
 plt.rcParams.update({
-    # 1. Resolution
-    "figure.dpi": 300,          # High res for viewing in Jupyter/IDE
-    "savefig.dpi": 600,         # Max quality for saving files
-    "savefig.bbox": "tight",    # Always crop out empty whitespace
+    # 1. Dimensions and Resolution
+    "figure.figsize": (6, 4),    # Exactly matches the 6-inch textwidth from automl.sty
+    "figure.dpi": 100,           # Standard for screen viewing
+    "savefig.dpi": 600,          # High resolution for the final PDF
+    "savefig.bbox": "tight",     # Crop whitespace
+    "savefig.pad_inches": 0.05,  # Minimal padding
 
-    # 2. Fonts (Bump these up so they don't look tiny at 600 DPI)
-    "font.size": 14,            # Base font size
-    "axes.titlesize": 16,       # Title size
-    "axes.labelsize": 14,       # X and Y label size
-    "xtick.labelsize": 12,      # X axis tick numbers
-    "ytick.labelsize": 12,      # Y axis tick numbers
+    # 2. Font Consistency (Matching Linux Libertine)
+    # The AutoML template uses 'libertine'. We try to find it or a close serif equivalent.
+    "font.family": "sans-serif",
+    "font.size": 11,             # Match paper's base font size (11pt)
+    "axes.titlesize": 14,        # Slightly larger for titles
+    "axes.titleweight": "bold",
+    "axes.labelsize": 12,        # Match base text
+    "axes.labelweight": "bold",
+    "xtick.labelsize": 10,       # Slightly smaller for ticks
+    "ytick.labelsize": 10,
+    "legend.fontsize": 14,
+    "figure.titlesize": 18,
+    "figure.titleweight": "bold",
 
-    # 3. Lines and Markers (Make the data actually visible)
-    "lines.linewidth": 2.5,     # Thicker plot lines
-    "lines.markersize": 8,      # Larger data points
-    "axes.linewidth": 1.5,      # Thicker bounding box around the plot
+    # 3. Math Rendering (Internal Mathtext)
+    # Uses Matplotlib's internal TeX parser without needing a full LaTeX install
+    "mathtext.fontset": "stix",  # STIX is a close visual match for Libertine/Times math
 
-    # 4. THE LEGEND FIX
-    "legend.fontsize": 12,      # Readable legend text
-    "legend.markerscale": 1.5,  # Blow up the legend markers so they are easy to see
-    "legend.frameon": True,     # Ensure the legend has a background
-    "legend.edgecolor": "black" # Clean border around the legend
+    # 4. Lines and Markers (High Visibility)
+    "lines.linewidth": 1.5,      # Professional thickness (not too chunky)
+    "lines.markersize": 4,
+    "axes.linewidth": 1.0,       # Clean bounding box
+    "patch.linewidth": 1.5,
+    "grid.linewidth": 0.8,
+    "grid.alpha": 0.6,           # Subtle grids
+    "grid.linestyle": "--",
+
+    # 5. PDF Compatibility
+    "pdf.fonttype": 42,          # Use TrueType fonts (required by many conferences)
+    "ps.fonttype": 42,           # Avoids Type 3 font errors in PDF checkers
+
+    # 6. Legend Styling
+    "legend.frameon": True,
+    "legend.edgecolor": "black",
+    "legend.facecolor": "white",
+    "legend.framealpha": 0.8,
+    "legend.fancybox": False,    # Square corners look more professional in papers
+    "legend.shadow": False,
 })
 
 class TargetScale(Enum):
@@ -64,11 +87,569 @@ class TargetScale(Enum):
         except KeyError:
             raise ValueError(f"Invalid target_scale: {label}. Expected one of {list(mapping.keys())}")
 
-# plotting functions for main experiment
+# plotting functions for the main experiment
 # -----
+def plot_ml_heatmap(results_data, visual_config, plot_scenario=None, plot_metric=None, plot_title=None, mark_best=False, layout_grid=None):
+    """
+    Generates a grid of heatmaps (Rows = Scenarios, Columns = Metrics).
+    Tick marks are removed from axes and colorbars for a clean academic look.
+    Includes custom grid layout support with auto-sizing (-1) and bottom-row centering.
+    """
+    # 1. Identify all available entities for filtering
+    all_models = list(results_data.keys())
+    all_scenarios = []
+    all_metrics_found = []
+    
+    for model_runs in results_data.values():
+        if model_runs:
+            all_scenarios.extend([run['scenario'] for run in model_runs])
+            all_metrics_found.extend(list(model_runs[0]['instance_summary'].keys()))
+    
+    all_scenarios = sorted(list(set(all_scenarios)))
+    all_metrics_found = set(all_metrics_found)
+
+    FIXED_METRIC_ORDER = ["NLLH", "CRPS", "Wasserstein", "KS"]
+    
+    if plot_metric is not None:
+        requested_metrics = [plot_metric] if isinstance(plot_metric, str) else plot_metric
+        metrics = sorted(requested_metrics, key=lambda x: FIXED_METRIC_ORDER.index(x) if x in FIXED_METRIC_ORDER else 99)
+    else:
+        metrics = [m for m in FIXED_METRIC_ORDER if m in all_metrics_found]
+
+    if plot_scenario is not None:
+        scenarios = [plot_scenario] if isinstance(plot_scenario, str) else plot_scenario
+    else:
+        scenarios = all_scenarios
+
+    # --- NEW: Layout Grid Setup (Supporting -1 Auto-Size) ---
+    use_custom_grid = layout_grid is not None and (plot_scenario is not None or plot_metric is not None)
+    total_plots = len(scenarios) * len(metrics)
+    
+    if use_custom_grid:
+        g_rows, g_cols = layout_grid
+        if g_rows == -1: g_rows = int(np.ceil(total_plots / g_cols))
+        if g_cols == -1: g_cols = int(np.ceil(total_plots / g_rows))
+    else:
+        g_rows, g_cols = len(scenarios), len(metrics)
+
+    fig, axes = plt.subplots(g_rows, g_cols, 
+                             figsize=(8 * g_cols, 6 * g_rows), 
+                             squeeze=False)
+
+    for row_idx, scenario in enumerate(scenarios):
+        for col_idx, metric in enumerate(metrics):
+            # --- Axis routing ---
+            if use_custom_grid:
+                plot_idx = row_idx * len(metrics) + col_idx
+                ax_row, ax_col = plot_idx // g_cols, plot_idx % g_cols
+                ax = axes[ax_row][ax_col]
+            else:
+                ax_row, ax_col = row_idx, col_idx
+                ax = axes[ax_row][ax_col]
+            
+            # --- AGGREGATION LOGIC ---
+            records = []
+            for model_name in all_models:
+                runs = results_data[model_name]
+                for run in runs:
+                    if run['scenario'] == scenario:
+                        values = run['instance_summary'].get(metric)
+                        if values is None: continue
+                        run_score = values.numpy().mean() if hasattr(values, 'numpy') else np.mean(values)
+                        
+                        # Check for full-dataset runs and calculate effective context_size
+                        ctx_size = run['context_size']
+                        is_full_dataset = False
+                        
+                        if ctx_size is None:
+                            ctx_size = int(run['train_size'][0] / run['num_samples_per_instance'])
+                            is_full_dataset = True
+                        
+                        records.append({
+                            'context_size': ctx_size,
+                            'num_samples_per_instance': run['num_samples_per_instance'],
+                            'fold': run['fold'],
+                            'seed_ctx': run.get('seed_context_size', -1) if run.get('seed_context_size') is not None else -1,
+                            'seed_samp': run['seed_samples_per_instance'],
+                            'score': run_score,
+                            'is_full': is_full_dataset 
+                        })
+            
+            if not records:
+                ax.text(0.5, 0.5, "No Data", ha='center', va='center')
+                continue
+                
+            # Normalize CV Fold Discrepancies
+            full_runs = [r for r in records if r['is_full']]
+            if full_runs:
+                max_ctx_map = {}
+                for r in full_runs:
+                    ns = r['num_samples_per_instance']
+                    if ns not in max_ctx_map or r['context_size'] > max_ctx_map[ns]:
+                        max_ctx_map[ns] = r['context_size']
+                
+                for r in records:
+                    if r['is_full']:
+                        r['context_size'] = max_ctx_map[r['num_samples_per_instance']]
+
+            df = pd.DataFrame(records)
+            df_step2 = df.groupby(['fold', 'seed_ctx', 'context_size', 'num_samples_per_instance'])['score'].mean().reset_index()
+            df_step3 = df_step2.groupby(['fold', 'context_size', 'num_samples_per_instance'])['score'].mean().reset_index()
+            final_df = df_step3.groupby(['context_size', 'num_samples_per_instance'])['score'].mean().reset_index()
+            
+            pivot_table = final_df.pivot(index='context_size', columns='num_samples_per_instance', values='score')
+            pivot_table = pivot_table.sort_index(ascending=True).sort_index(axis=1, ascending=True)
+
+            cmap = visual_config.get('cmap', 'viridis')
+            annot = visual_config.get('annot', True)
+            fmt = visual_config.get('fmt', '.4f')
+            
+            sns.heatmap(
+                pivot_table, annot=annot, fmt=fmt, cmap=cmap, 
+                cbar_kws={'label': metric}, linewidths=.5, ax=ax,
+                mask=pivot_table.isnull()
+            )
+            
+            # --- HIGHLIGHT BEST SCORES ---
+            if mark_best and not pivot_table.empty:
+                global_min = pivot_table.min().min()
+                
+                for i, (idx, row) in enumerate(pivot_table.iterrows()):
+                    if row.isnull().all():
+                        continue
+                    
+                    local_min = row.min()
+                    best_col = row.idxmin()
+                    j = pivot_table.columns.get_loc(best_col)
+                    
+                    x_pos = j + 0.85
+                    y_pos = i + 0.85 
+                    
+                    if local_min == global_min:
+                        ax.scatter(x_pos, y_pos, color='gold', marker='*', s=150, 
+                                   edgecolor='black', linewidth=0.5, zorder=5)
+                    else:
+                        ax.scatter(x_pos, y_pos, color='silver', marker='*', s=70, 
+                                   edgecolor='black', linewidth=0.5, zorder=5)
+            
+            # --- REMOVE TICK MARKS ---
+            ax.tick_params(axis='both', which='both', length=0)
+            
+            cbar = ax.collections[0].colorbar
+            if cbar:
+                cbar.ax.tick_params(axis='both', which='both', length=0)
+
+            ax.invert_yaxis() 
+            
+            # --- TITLES AND LABELS (Grid Layout) ---
+            if len(scenarios) == 1 and len(metrics) == 1:
+                # Specific Scenario & Specific Metric -> Title becomes Scenario
+                ax.set_title(scenario, pad=20)
+                ax.set_ylabel("# Instances")
+            elif use_custom_grid:
+                if len(metrics) == 1:
+                    ax.set_title(scenario, pad=20)
+                    ax.set_ylabel("# Instances")
+                else:
+                    ax.set_title(metric, pad=20)
+                    if ax_col == 0: 
+                        ax.set_ylabel(f"{scenario}\n# Instances")
+                    else:
+                        ax.set_ylabel("# Instances")
+            else:
+                # Standard Layout (Rows = Scenarios, Cols = Metrics)
+                if row_idx == 0:
+                    ax.set_title(metric, pad=20)
+                    
+                if col_idx == 0:
+                    ax.set_ylabel(f"{scenario}\n# Instances")
+                else:
+                    ax.set_ylabel("# Instances")
+                
+            ax.set_xlabel("# Samples per Instance")
+
+    # --- NEW: Hide (don't delete) unused subplots to preserve GridSpec structure ---
+    if use_custom_grid:
+        for i in range(total_plots, g_rows * g_cols):
+            axes[i // g_cols][i % g_cols].set_visible(False)
+
+    if plot_title:
+        fig.suptitle(plot_title)
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+    else:
+        plt.tight_layout()
+        
+    # --- NEW: Center the orphaned heatmaps in the last row ---
+    if use_custom_grid:
+        remainder = total_plots % g_cols
+        if remainder != 0 and g_cols > 1:
+            # 1. Calculate physical screen distance of a single column jump
+            pos0 = axes[0][0].get_position()
+            pos1 = axes[0][1].get_position()
+            col_stride = pos1.x0 - pos0.x0
+            
+            # 2. Calculate shift required to center
+            shift = (g_cols - remainder) * col_stride / 2.0
+            last_row_idx = g_rows - 1
+            
+            # 3. Apply manual positional shift to BOTH heatmap and colorbar
+            for j in range(remainder):
+                ax_to_shift = axes[last_row_idx][j]
+                
+                # Shift the main heatmap
+                pos = ax_to_shift.get_position()
+                pos.x0 += shift
+                pos.x1 += shift
+                ax_to_shift.set_position(pos)
+                
+                # Shift the associated colorbar (if it exists)
+                if len(ax_to_shift.collections) > 0:
+                    cbar = ax_to_shift.collections[0].colorbar
+                    if cbar is not None:
+                        cbar_pos = cbar.ax.get_position()
+                        cbar_pos.x0 += shift
+                        cbar_pos.x1 += shift
+                        cbar.ax.set_position(cbar_pos)
+        
+    return fig
+
+def plot_heatmap_scatter(results_data, visual_config, n_instances=None, n_samples_per_instance=None, 
+                         overlay=False, log_x=False, log_y=False, zoom_on_model=None, plot_title=None, 
+                         plot_scenario=None, plot_metric=None,
+                         show_legend=True, global_legend=False, use_hatching=False, layout_grid=None):
+    """
+    Generates styled line/scatter plots with variance shading derived from heatmap data.
+    Aligned with the styling and layout engine of plot_full_instances_results.
+    """
+    # 1. Validation
+    if (n_instances is None) == (n_samples_per_instance is None):
+        raise ValueError("Exactly one of 'n_instances' or 'n_samples_per_instance' must be provided.")
+        
+    if set(results_data.keys()) != set(visual_config.keys()):
+        raise KeyError("The keys in results_data and visual_config must match exactly.")
+    
+    if zoom_on_model is not None and zoom_on_model not in results_data.keys():
+        raise ValueError(f"zoom_on_model '{zoom_on_model}' not found in results_data keys.")
+
+    # 2. Flatten and Pre-process Data
+    all_records = []
+    all_scenarios = []
+    all_metrics_found = []
+    
+    for model_runs in results_data.values():
+        if model_runs:
+            all_scenarios.extend([run['scenario'] for run in model_runs])
+            all_metrics_found.extend(list(model_runs[0]['instance_summary'].keys()))
+    
+    all_scenarios = sorted(list(set(all_scenarios)))
+    all_metrics_found = set(all_metrics_found)
+
+    FIXED_METRIC_ORDER = ["NLLH", "CRPS", "Wasserstein", "KS"]
+    if plot_metric is not None:
+        requested_metrics = [plot_metric] if isinstance(plot_metric, str) else plot_metric
+        metrics = sorted(requested_metrics, key=lambda x: FIXED_METRIC_ORDER.index(x) if x in FIXED_METRIC_ORDER else 99)
+    else:
+        metrics = [m for m in FIXED_METRIC_ORDER if m in all_metrics_found]
+
+    scenarios = [plot_scenario] if isinstance(plot_scenario, str) else plot_scenario
+    scenarios = scenarios if scenarios is not None else all_scenarios
+
+    for model_name, runs in results_data.items():
+        for scenario in scenarios:
+            scen_runs = [r for r in runs if r['scenario'] == scenario]
+            if not scen_runs: continue
+            
+            scen_records = []
+            for run in scen_runs:
+                ctx_size = run['context_size']
+                is_full_dataset = False
+                if ctx_size is None:
+                    ctx_size = int(run['train_size'][0] / run['num_samples_per_instance'])
+                    is_full_dataset = True
+                    
+                for metric in metrics:
+                    values = run['instance_summary'].get(metric)
+                    if values is None: continue
+                    run_score = values.numpy().mean() if hasattr(values, 'numpy') else np.mean(values)
+                    
+                    scen_records.append({
+                        "model": model_name,
+                        "scenario": scenario,
+                        "metric": metric,
+                        "context_size": ctx_size,
+                        "num_samples_per_instance": run['num_samples_per_instance'],
+                        "fold": run['fold'],
+                        "seed_ctx": run.get('seed_context_size', -1) if run.get('seed_context_size') is not None else -1,
+                        "score": run_score,
+                        "is_full": is_full_dataset
+                    })
+            
+            # Normalize CV Fold Discrepancies
+            full_runs = [r for r in scen_records if r['is_full']]
+            if full_runs:
+                max_ctx_map = {}
+                for r in full_runs:
+                    ns = r['num_samples_per_instance']
+                    if ns not in max_ctx_map or r['context_size'] > max_ctx_map[ns]:
+                        max_ctx_map[ns] = r['context_size']
+                for r in scen_records:
+                    if r['is_full']:
+                        r['context_size'] = max_ctx_map[r['num_samples_per_instance']]
+                        
+            all_records.extend(scen_records)
+
+    df = pd.DataFrame(all_records)
+    if df.empty:
+        raise ValueError("No data found to plot.")
+
+    # Apply axis filtering based on user input
+    if n_instances is not None:
+        x_col = 'num_samples_per_instance'
+        x_label = "# Samples per Instance"
+        overlay_col = 'context_size'
+        overlay_suffix = "Instances"
+        
+        if not overlay:
+            filtered_dfs = []
+            for scen in df['scenario'].unique():
+                scen_df = df[df['scenario'] == scen]
+                target_instances = min(n_instances, scen_df['context_size'].max())
+                filtered_dfs.append(scen_df[scen_df['context_size'] == target_instances])
+            df = pd.concat(filtered_dfs) if filtered_dfs else pd.DataFrame()
+    else:
+        x_col = 'context_size'
+        x_label = "Context Size"
+        overlay_col = 'num_samples_per_instance'
+        overlay_suffix = "Samples/Inst"
+        
+        if not overlay:
+            df = df[df['num_samples_per_instance'] == n_samples_per_instance]
+
+    if df.empty:
+        raise ValueError("No data found after filtering for the specified instances/samples.")
+
+    # --- Build dynamic loop configuration & overlay gradients ---
+    if overlay:
+        model_to_use = list(results_data.keys())[0] # Assumes single model
+        overlay_vals = sorted(df[overlay_col].unique())
+        
+        base_color = visual_config[model_to_use][0]
+        # Generate gradient, dropping the first white color
+        colors = sns.light_palette(base_color, n_colors=len(overlay_vals) + 1)[1:]
+            
+        plot_items = []
+        for i, val in enumerate(overlay_vals):
+            plot_items.append({
+                'label': f"{val} {overlay_suffix}",
+                'color': colors[i],
+                'hatch': '',
+                'filter_model': model_to_use,
+                'filter_val': val
+            })
+    else:
+        plot_items = []
+        for m_name, (color, hatch) in visual_config.items():
+            plot_items.append({
+                'label': m_name,
+                'color': color,
+                'hatch': hatch,
+                'filter_model': m_name,
+                'filter_val': None
+            })
+
+    # --- Grid Layout Setup ---
+    use_custom_grid = layout_grid is not None and (plot_scenario is not None or plot_metric is not None)
+    if use_custom_grid:
+        g_rows, g_cols = layout_grid
+    else:
+        g_rows, g_cols = len(scenarios), len(metrics)
+
+    fig, axes = plt.subplots(g_rows, g_cols, 
+                             figsize=(6 * g_cols, 5 * g_rows), 
+                             squeeze=False)
+
+    model_handles = {}
+    special_handles = {}
+    has_out_of_bounds = False
+
+    for row_idx, scenario in enumerate(scenarios):
+        scenario_df = df[df['scenario'] == scenario]
+        if scenario_df.empty:
+            continue
+            
+        scenario_x_sizes = sorted(scenario_df[x_col].unique())
+        
+        for col_idx, metric in enumerate(metrics):
+            # --- Axis routing ---
+            if use_custom_grid:
+                plot_idx = row_idx * len(metrics) + col_idx
+                ax_row, ax_col = plot_idx // g_cols, plot_idx % g_cols
+                ax = axes[ax_row][ax_col]
+            else:
+                ax_row, ax_col = row_idx, col_idx
+                ax = axes[ax_row][ax_col]
+            
+            zoom_bounds = {"min": float('inf'), "max": float('-inf')}
+            line_objs = {}
+            mini_leg = None
+            
+            for p_item in plot_items:
+                lbl = p_item['label']
+                color = p_item['color']
+                hatch = p_item['hatch']
+                model_name = p_item['filter_model']
+                
+                subset = scenario_df[(scenario_df['model'] == model_name) & 
+                                     (scenario_df['metric'] == metric)]
+                
+                if overlay:
+                    subset = subset[subset[overlay_col] == p_item['filter_val']]
+                    
+                if subset.empty:
+                    continue
+
+                df_step2 = subset.groupby(['fold', 'seed_ctx', x_col])['score'].mean().reset_index()
+                df_step3 = df_step2.groupby(['fold', x_col])['score'].mean().reset_index()
+                final_stats = df_step3.groupby(x_col)['score'].agg(['mean', 'std']).reset_index()
+                final_stats = final_stats.sort_values(x_col)
+                
+                x = final_stats[x_col]
+                y_mean = final_stats['mean']
+                y_std = final_stats['std'].fillna(0)
+                
+                line, = ax.plot(x, y_mean, label=lbl, color=color, marker='o')
+                line_objs[lbl] = line
+                if lbl not in model_handles:
+                    model_handles[lbl] = line
+                
+                lower_bound = y_mean - y_std
+                upper_bound = y_mean + y_std
+                if log_y and metric != 'NLLH':
+                    lower_bound = np.maximum(lower_bound, y_mean * 0.1)
+                
+                hatch_val = hatch if use_hatching else None
+                ax.fill_between(x, lower_bound, upper_bound, 
+                                color=color, alpha=0.2, hatch=hatch_val, edgecolor='none')
+
+                if zoom_on_model == model_name:
+                    lower_bound_zoom = (y_mean - y_std).min()
+                    upper_bound_zoom = (y_mean + y_std).max()
+                    zoom_bounds["min"] = min(zoom_bounds["min"], lower_bound_zoom)
+                    zoom_bounds["max"] = max(zoom_bounds["max"], upper_bound_zoom)
+
+            if log_x:
+                ax.set_xscale('log')
+                ax.set_xticks(scenario_x_sizes) 
+                ax.xaxis.set_major_formatter(ScalarFormatter())
+                plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+            
+            if log_y and metric != 'NLLH':
+                ax.set_yscale('log')
+
+            if zoom_on_model is not None:
+                margin = (zoom_bounds["max"] - zoom_bounds["min"]) * 0.05
+                low, high = zoom_bounds["min"] - margin, zoom_bounds["max"] + margin
+                if log_y and metric != 'NLLH' and low <= 0:
+                    low = zoom_bounds["min"] * 0.9 if zoom_bounds["min"] > 0 else 1e-9
+                ax.set_ylim(low, high)
+
+            # Handle Invisible Models (Mini-Legend Style)
+            if zoom_on_model is not None:
+                current_ylim_max = ax.get_ylim()[1]
+                out_of_bounds_models = []
+                for lbl, line in line_objs.items():
+                    p_cfg = next(item for item in plot_items if item['label'] == lbl)
+                    subset = scenario_df[(scenario_df['model'] == p_cfg['filter_model']) & 
+                                         (scenario_df['metric'] == metric)]
+                    if overlay:
+                        subset = subset[subset[overlay_col] == p_cfg['filter_val']]
+                        
+                    if subset.empty: continue
+                    
+                    df_step2 = subset.groupby(['fold', 'seed_ctx', x_col])['score'].mean().reset_index()
+                    df_step3 = df_step2.groupby(['fold', x_col])['score'].mean().reset_index()
+                    stats = df_step3.groupby(x_col)['score'].agg(['mean', 'std'])
+                    
+                    if (stats['mean'] - stats['std'].fillna(0)).min() > current_ylim_max:
+                        out_of_bounds_models.append(lbl)
+                
+                if out_of_bounds_models:
+                    has_out_of_bounds = True
+                    if show_legend:
+                        oob_handles = [plt.Line2D([], [], color='dimgray', linestyle='none', 
+                                                  marker='$\\gg$', markeredgecolor='dimgray', 
+                                                  markeredgewidth=0.5, markersize=10) for m in out_of_bounds_models]
+                        mini_leg = ax.legend(oob_handles, out_of_bounds_models, loc='lower right')
+                        mini_leg.set_zorder(10)
+
+            # --- Layout / Titling ---
+            if use_custom_grid:
+                if len(metrics) == 1:
+                    ax.set_title(scenario)
+                    if ax_col == 0: ax.set_ylabel(metric)
+                else:
+                    ax.set_title(metric)
+                    if ax_col == 0: ax.set_ylabel(scenario)
+            else:
+                if row_idx == 0: ax.set_title(f"Metric: {metric}")
+                ax.set_ylabel(f"{scenario}\n\n{metric}" if col_idx == 0 else metric)
+            
+            ax.set_xlabel(x_label)
+            ax.grid(True)
+            
+            # --- Local Legend Handling ---
+            if show_legend and not global_legend:
+                main_leg = ax.legend(loc='upper right')
+                if mini_leg:
+                    # Matplotlib drops the first legend if you call ax.legend() twice. We safely add it back.
+                    ax.add_artist(mini_leg)
+
+    # --- Clean up unused subplots ---
+    if use_custom_grid:
+        total_plots = len(scenarios) * len(metrics)
+        for i in range(total_plots, g_rows * g_cols):
+            fig.delaxes(axes[i // g_cols][i % g_cols])
+
+    # --- Global Legend & Spacing Setup ---
+    if has_out_of_bounds and global_legend:
+        special_handles['Out-of-Bounds'] = ax.scatter([], [], marker='$\\gg$', facecolors='none', edgecolors='dimgray', linewidths=0.5, s=100)
+
+    final_handles = list(model_handles.values()) + list(special_handles.values())
+    final_labels = list(model_handles.keys()) + list(special_handles.keys())
+    ncols = len(final_handles)
+    
+    fig_height = 5 * g_rows
+
+    # Setup the spacing and titles depending on the global_legend boolean
+    if show_legend and global_legend:
+        if plot_title:
+            top_space = 1.0
+            legend_y = 1.0 - (0.5 / fig_height)
+            title_y = 1.0 - (0.15 / fig_height)
+            fig.suptitle(plot_title, y=title_y)
+        else:
+            top_space = 0.7
+            legend_y = 1.0 - (0.15 / fig_height)
+            
+        fig.legend(final_handles, final_labels, loc='upper center', 
+               bbox_to_anchor=(0.5, legend_y), ncol=ncols)
+    else:
+        if plot_title:
+            top_space = 0.5
+            title_y = 1.0 - (0.15 / fig_height)
+            fig.suptitle(plot_title, y=title_y)
+        else:
+            top_space = 0.1
+            
+    rect_top = 1.0 - (top_space / fig_height)
+    plt.tight_layout(rect=[0, 0, 1, rect_top])
+    
+    plt.close(fig) # Prevent double-print in Jupyter
+    return fig
+
 def plot_feat_dropping_results(results_data, visual_config, log_x=False, log_y=False, 
                     zoom_on_model=None, mark_best=False, 
-                    plot_scenario=None, plot_metric=None, plot_title=None, grid_layout=None):
+                    plot_scenario=None, plot_metric=None, plot_title=None, grid_layout=None, use_hatching=False):
     """
     Plots ML experiment results for the 'feature dropping' experiment.
     
@@ -195,7 +776,7 @@ def plot_feat_dropping_results(results_data, visual_config, log_x=False, log_y=F
                 y_mean = final_stats['mean']
                 y_std = final_stats['std']
                 
-                line, = ax.plot(x, y_mean, label=model_name, color=color, marker='o', markersize=4)
+                line, = ax.plot(x, y_mean, label=model_name, color=color, marker='o')
                 line_objs[model_name] = line
                 if model_name not in model_handles:
                     model_handles[model_name] = line
@@ -206,7 +787,8 @@ def plot_feat_dropping_results(results_data, visual_config, log_x=False, log_y=F
                 if log_y and metric != 'NLLH':
                     lower_bound = np.maximum(lower_bound, y_mean * 0.1)
                 
-                ax.fill_between(x, lower_bound, upper_bound, color=color, alpha=0.2, hatch=None, edgecolor='none')
+                hatch_val = hatch if use_hatching else None
+                ax.fill_between(x, lower_bound, upper_bound, color=color, alpha=0.2, hatch=hatch_val, edgecolor='none')
                 
                 if y_mean.min() < abs_best_val:
                     abs_best_val = y_mean.min()
@@ -254,7 +836,7 @@ def plot_feat_dropping_results(results_data, visual_config, log_x=False, log_y=F
             ax.set_xticklabels(filtered_labels)
 
             # 3. Formatting for readability
-            plt.setp(ax.get_xticklabels(), rotation=45, ha='right', rotation_mode='anchor', fontsize=9)
+            plt.setp(ax.get_xticklabels(), rotation=45, ha='right', rotation_mode='anchor')
             
             # 4. Tighten limits and Invert
             ax.set_xlim(min(current_x_ticks), max(current_x_ticks))
@@ -279,17 +861,17 @@ def plot_feat_dropping_results(results_data, visual_config, log_x=False, log_y=F
             # Layout
             if use_custom_grid:
                 if n_metrics == 1:
-                    ax.set_title(scenario, fontsize=14, fontweight='bold')
-                    if ax_col == 0: ax.set_ylabel(metric, fontsize=12, fontweight='bold')
+                    ax.set_title(scenario)
+                    if ax_col == 0: ax.set_ylabel(metric)
                 else:
-                    ax.set_title(metric, fontsize=14, fontweight='bold')
-                    if ax_col == 0: ax.set_ylabel(scenario, fontsize=12, fontweight='bold')
+                    ax.set_title(metric)
+                    if ax_col == 0: ax.set_ylabel(scenario)
             else:
-                if row_idx == 0: ax.set_title(f"Metric: {metric}", fontsize=14, fontweight='bold')
-                ax.set_ylabel(f"{scenario}\n{metric}" if col_idx == 0 else metric, fontsize=12, fontweight='bold')
+                if row_idx == 0: ax.set_title(f"Metric: {metric}")
+                ax.set_ylabel(f"{scenario}\n{metric}" if col_idx == 0 else metric)
             
-            ax.set_xlabel("Number of Features")
-            ax.grid(True, linestyle='--', alpha=0.6)
+            ax.set_xlabel("# Features")
+            ax.grid(True)
 
     # Delete any unused subplots in a custom grid completely
     if use_custom_grid:
@@ -311,7 +893,7 @@ def plot_feat_dropping_results(results_data, visual_config, log_x=False, log_y=F
         top_space = 1.6
         legend_y = 1.0 - (0.5 / fig_height)
         title_y = 1.0 - (0.15 / fig_height)
-        fig.suptitle(plot_title, fontsize=18, fontweight='bold', y=title_y)
+        fig.suptitle(plot_title, y=title_y)
     else:
         top_space = 1.3
         legend_y = 1.0 - (0.15 / fig_height)
@@ -319,13 +901,287 @@ def plot_feat_dropping_results(results_data, visual_config, log_x=False, log_y=F
     rect_top = 1.0 - (top_space / fig_height)
 
     fig.legend(final_handles, final_labels, loc='upper center', 
-               bbox_to_anchor=(0.5, legend_y), ncol=ncols, fontsize=10)
+               bbox_to_anchor=(0.5, legend_y), ncol=ncols)
 
     plt.tight_layout(rect=[0, 0, 1, rect_top])
     
     return fig
 
-def instance_level_bar_chart(results_data, context_size, metric_name, plot_title=None, lower_is_better=True):
+def plot_full_instances_results(results_data, visual_config, log_x=False, log_y=False, 
+                    zoom_on_model=None, mark_best=False, 
+                    plot_scenario=None, plot_metric=None, plot_title=None, 
+                    show_legend=True, use_hatching=False, layout_grid=None):
+    """
+    Plots ML experiment results for the 'num_samples_per_instance' experiment.
+    Includes all previous features: log-scaling, robust zooming, best-point 
+    highlighting, visibility annotations, conditional shade clipping, and custom grid layouts.
+    """
+    # 1. Validation
+    if set(results_data.keys()) != set(visual_config.keys()):
+        raise KeyError("The keys in results_data and visual_config must match exactly.")
+    
+    if zoom_on_model is not None and zoom_on_model not in results_data.keys():
+        raise ValueError(f"zoom_on_model '{zoom_on_model}' not found in results_data keys.")
+
+    # 2. Flatten and Pre-process Data
+    all_records = []
+    metrics_list = []
+
+    for model_name, runs in results_data.items():
+        for run in runs:
+            scenario = run['scenario']
+            x_val = run['num_samples_per_instance']
+            fold = run['fold']
+            seed = run['seed_samples_per_instance']
+            summary = run['instance_summary']
+            
+            for metric_name, values in summary.items():
+                if metric_name != "RMSE" and metric_name not in metrics_list:
+                    metrics_list.append(metric_name)
+                
+                # Step 1: Mean of internal score array
+                val = values.numpy().mean() if hasattr(values, 'numpy') else np.mean(values)
+                all_records.append({
+                    "model": model_name, "scenario": scenario, 
+                    "x_val": x_val, "fold": fold, "seed": seed, 
+                    "metric": metric_name, "value": val
+                })
+
+    df = pd.DataFrame(all_records)
+    
+    # Filtering for scenarios and metrics
+    all_available_scenarios = sorted(df['scenario'].unique())
+    all_available_metrics = metrics_list
+
+    # Handle Scenario filtering
+    if plot_scenario is not None:
+        requested_scenarios = [plot_scenario] if isinstance(plot_scenario, str) else plot_scenario
+        missing = set(requested_scenarios) - set(all_available_scenarios)
+        if missing:
+            raise ValueError(f"Scenarios {missing} not found in data. Available: {all_available_scenarios}")
+        scenarios = requested_scenarios
+    else:
+        scenarios = all_available_scenarios
+
+    if plot_metric is not None:
+        if plot_metric not in all_available_metrics:
+            raise ValueError(f"Metric '{plot_metric}' not found in data.")
+        metrics = [plot_metric]
+    else:
+        metrics = all_available_metrics
+
+    x_ticks = sorted(df['x_val'].unique())
+
+    # --- NEW: Layout Grid Setup ---
+    use_custom_grid = layout_grid is not None and (plot_scenario is not None or plot_metric is not None)
+    if use_custom_grid:
+        g_rows, g_cols = layout_grid
+    else:
+        g_rows, g_cols = len(scenarios), len(metrics)
+
+    # 3. Plotting Setup
+    fig, axes = plt.subplots(g_rows, g_cols, 
+                             figsize=(6 * g_cols, 5 * g_rows), 
+                             squeeze=False)
+
+    model_handles = {}
+    special_handles = {}
+    has_out_of_bounds = False
+
+    for row_idx, scenario in enumerate(scenarios):
+        scenario_max_x = df[df['scenario'] == scenario]['x_val'].max()
+        
+        for col_idx, metric in enumerate(metrics):
+            # --- NEW: Axis routing ---
+            if use_custom_grid:
+                plot_idx = row_idx * len(metrics) + col_idx
+                ax_row, ax_col = plot_idx // g_cols, plot_idx % g_cols
+                ax = axes[ax_row][ax_col]
+            else:
+                ax_row, ax_col = row_idx, col_idx
+                ax = axes[ax_row][ax_col]
+            
+            zoom_bounds = {"min": float('inf'), "max": float('-inf')}
+            abs_best_val = float('inf')
+            abs_best_model = None
+            abs_best_coords = (None, None)
+            line_objs = {}
+            added_early_term_legend = False
+            
+            for model_name, (color, hatch) in visual_config.items():
+                subset = df[(df['model'] == model_name) & (df['scenario'] == scenario) & (df['metric'] == metric)]
+                if subset.empty: continue
+
+                # --- AGGREGATION LOGIC ---
+                seed_counts = subset.groupby(['x_val', 'fold']).size()
+                if not seed_counts.eq(5).all():
+                    raise AssertionError(f"Model {model_name} in {scenario} does not have exactly 5 seeds for all x_val/folds.")
+                
+                fold_means = subset.groupby(['x_val', 'fold'])['value'].mean().reset_index()
+                final_stats = fold_means.groupby('x_val')['value'].agg(['mean', 'std']).reset_index().sort_values('x_val')
+                
+                x = final_stats['x_val']
+                y_mean = final_stats['mean']
+                y_std = final_stats['std']
+                
+                # Plot line
+                line, = ax.plot(x, y_mean, label=model_name, color=color, marker='o')
+                line_objs[model_name] = line
+                if model_name not in model_handles:
+                    model_handles[model_name] = line
+                
+                # Conditional Shade Clipping (Prevents Log-Pillars)
+                lower_bound = y_mean - y_std
+                upper_bound = y_mean + y_std
+                if log_y and metric != 'NLLH':
+                    lower_bound = np.maximum(lower_bound, y_mean * 0.1)
+                
+                hatch_val = hatch if use_hatching else None
+                ax.fill_between(x, lower_bound, upper_bound, color=color, alpha=0.2, hatch=hatch_val, edgecolor='none')
+                
+                # --- EARLY TERMINATION MARKER (Restored) ---
+                current_max_x = x.max()
+                if current_max_x < scenario_max_x:
+                    last_x = final_stats['x_val'].iloc[-1]
+                    last_y = final_stats['mean'].iloc[-1]
+                    
+                    # Toned down the offsets so they don't jump too far right on large data ranges
+                    if log_x:
+                        x_offset = last_x * 1.06  
+                    else:
+                        x_range = scenario_max_x - x_ticks[0]
+                        x_offset = last_x + (x_range * 0.01) 
+                        
+                    label = 'Timeout' if not added_early_term_legend else '_nolegend_'
+                    sc = ax.scatter(x_offset, last_y, color=color, marker='x', s=60, 
+                               linewidth=1.5, zorder=6, label=label)
+                    added_early_term_legend = True
+                    if 'Timeout' not in special_handles: 
+                        special_handles['Timeout'] = sc
+                # ---------------------------------------------------
+                
+                # Track Best
+                if y_mean.min() < abs_best_val:
+                    abs_best_val = y_mean.min()
+                    abs_best_model = model_name
+                    abs_best_coords = (x[y_mean.idxmin()], abs_best_val)
+
+                # Update Zoom Bounds
+                if zoom_on_model == model_name:
+                    zoom_bounds["min"] = min(zoom_bounds["min"], (y_mean - y_std).min())
+                    zoom_bounds["max"] = max(zoom_bounds["max"], (y_mean + y_std).max())
+
+            # Mark Best
+            if mark_best and abs_best_model is not None:
+                bx, by = abs_best_coords
+                sc_best = ax.scatter(bx, by, color='gold', marker='*', s=150, edgecolor='black', linewidth=0.5, zorder=5, label='Best Model')
+                if 'Best Model' not in special_handles:
+                    special_handles['Best Model'] = sc_best
+
+            # Robust Zoom Logic
+            if zoom_on_model is not None:
+                margin = (zoom_bounds["max"] - zoom_bounds["min"]) * 0.05
+                low, high = zoom_bounds["min"] - margin, zoom_bounds["max"] + margin
+                if log_y and metric != 'NLLH' and low <= 0:
+                    low = zoom_bounds["min"] * 0.9 if zoom_bounds["min"] > 0 else 1e-9
+                ax.set_ylim(low, high)
+
+            # Axis Formatting
+            if log_x:
+                ax.set_xscale('log')
+                ax.set_xticks(x_ticks) 
+                ax.xaxis.set_major_formatter(ScalarFormatter())
+                plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+            if log_y and metric != 'NLLH': ax.set_yscale('log')
+
+            # Handle Invisible Models
+            if zoom_on_model is not None:
+                current_ylim_max = ax.get_ylim()[1]
+                out_of_bounds_models = []
+                for model_name, line in line_objs.items():
+                    subset = df[(df['model'] == model_name) & (df['scenario'] == scenario) & (df['metric'] == metric)]
+                    if subset.empty: continue
+                    fold_means = subset.groupby(['x_val', 'fold'])['value'].mean().reset_index()
+                    stats = fold_means.groupby('x_val')['value'].agg(['mean', 'std'])
+                    if (stats['mean'] - stats['std']).min() > current_ylim_max:
+                        out_of_bounds_models.append(model_name)
+                        
+                if out_of_bounds_models:
+                    has_out_of_bounds = True
+                    if show_legend:
+                        oob_handles = [plt.Line2D([], [], color='dimgray', linestyle='none', 
+                                                  marker='$\\gg$', markeredgecolor='dimgray', 
+                                                  markeredgewidth=0.5, markersize=10) for m in out_of_bounds_models]
+                        mini_leg = ax.legend(oob_handles, out_of_bounds_models, loc='upper right')
+                        mini_leg.set_zorder(10)
+
+            # --- NEW: Layout ---
+            if len(scenarios) == 1 and len(metrics) == 1:
+                # Case 1: Specific Scenario & Specific Metric -> Title becomes Scenario
+                ax.set_title(scenario)
+                ax.set_ylabel(metric)
+            elif use_custom_grid:
+                if n_metrics == 1:
+                    ax.set_title(scenario)
+                    if ax_col == 0: ax.set_ylabel(metric)
+                else:
+                    ax.set_title(metric)
+                    if ax_col == 0: ax.set_ylabel(scenario)
+            else:
+                if row_idx == 0:
+                    ax.set_title(f"Metric: {metric}")
+                
+                if col_idx == 0:
+                    ax.set_ylabel(f"{scenario}\n\n{metric}")
+                else:
+                    ax.set_ylabel(metric)
+                
+            ax.set_xlabel("# Samples per Instance")
+            ax.grid(True)
+
+    # --- NEW: Clean up unused subplots ---
+    if use_custom_grid:
+        total_plots = len(scenarios) * len(metrics)
+        for i in range(total_plots, g_rows * g_cols):
+            fig.delaxes(axes[i // g_cols][i % g_cols])
+
+    # 4. Global Legend & Spacing Setup
+    if has_out_of_bounds:
+        special_handles['Out-of-Bounds'] = ax.scatter([], [], marker='$\\gg$', facecolors='none', edgecolors='dimgray', linewidths=0.5, s=100)
+
+    final_handles = list(model_handles.values()) + list(special_handles.values())
+    final_labels = list(model_handles.keys()) + list(special_handles.keys())
+    ncols = len(final_handles)
+    
+    fig_height = 5 * g_rows # <-- NEW: Fixed spacing calculation
+
+    # Reclaim whitespace if legends are toggled off
+    if show_legend:
+        if plot_title:
+            top_space = 1.0
+            legend_y = 1.0 - (0.5 / fig_height)
+            title_y = 1.0 - (0.15 / fig_height)
+            fig.suptitle(plot_title, y=title_y)
+        else:
+            top_space = 0.7
+            legend_y = 1.0 - (0.15 / fig_height)
+            
+        fig.legend(final_handles, final_labels, loc='upper center', 
+               bbox_to_anchor=(0.5, legend_y), ncol=ncols)
+    else:
+        if plot_title:
+            top_space = 0.5
+            title_y = 1.0 - (0.15 / fig_height)
+            fig.suptitle(plot_title, y=title_y)
+        else:
+            top_space = 0.1
+            
+    rect_top = 1.0 - (top_space / fig_height)
+    plt.tight_layout(rect=[0, 0, 1, rect_top])
+    
+    return fig
+
+def plot_instance_level_bar_chart(results_data, context_size, metric_name, plot_title=None, lower_is_better=True):
     """
     Plots an Instance-Level Stacked Bar Chart of Rank Proportions.
     Calculates consistency by ranking models on every single test instance independently.
@@ -443,28 +1299,28 @@ def instance_level_bar_chart(results_data, context_size, metric_name, plot_title
             prop = model_props[rank]
             if prop > 0:
                 ax.bar(x_idx, prop, bottom=bottom, color=rank_colors[rank], 
-                       edgecolor='white', linewidth=1.5, width=0.3)
+                       edgecolor='white', width=0.3)
                 bottom += prop
 
     # 6. Formatting
     ax.set_xticks(range(len(models)))
     
     # Set the model names and append a newline to reserve vertical space
-    ax.set_xticklabels([f"{m}\n" for m in models], rotation=0, fontsize=11)
+    ax.set_xticklabels([f"{m}\n" for m in models], rotation=0)
     
     # Draw the smaller Mean Rank text directly into that reserved space
     for x_idx, m in enumerate(models):
         ax.text(x_idx, -0.06, f"Mean Rank: {avg_ranks[m]:.2f}", 
-                transform=ax.get_xaxis_transform(), 
-                ha='center', va='top', fontsize=9)
+            transform=ax.get_xaxis_transform(), 
+            ha='center', va='top')
     
-    ax.set_ylabel("Percentage of Total Instances (%)", fontsize=12, fontweight='bold')
+    ax.set_ylabel("Percentage of Total Instances (%)")
     ax.set_ylim(0, 100)
-    ax.grid(axis='y', linestyle='--', alpha=0.6)
+    ax.grid(axis='y')
     
     # ADJUSTMENT: Inject total_instances (N) into the title
     if plot_title:
-        ax.set_title(plot_title, fontsize=14, fontweight='bold', pad=40)
+        ax.set_title(plot_title, pad=40)
     # else:
     #     ax.set_title(
     #         f"Instance-Level Rank Proportions\n"
@@ -475,15 +1331,15 @@ def instance_level_bar_chart(results_data, context_size, metric_name, plot_title
     rank_patches = [mpatches.Patch(facecolor=rank_colors[r], edgecolor='white', label=f'Rank {r}') 
                     for r in sorted(rank_counts.columns)]
     
-    ax.legend(handles=rank_patches, loc='lower center', bbox_to_anchor=(0.5, 1.02), 
-              ncol=len(rank_counts.columns), fontsize=11)
+    ax.legend(handles=rank_patches, loc='lower center', bbox_to_anchor=(0.5, 1.02), fontsize=10,
+              ncol=len(rank_counts.columns))
 
     plt.tight_layout()
     return fig
 
 def plot_time_results(results_data, visual_config, time_of=None, log_x=False, log_y=False, 
                       zoom_on_model=None, plot_title=None, mark_best=False, 
-                      plot_scenario=None):
+                      plot_scenario=None, use_hatching=False):
     """
     Plots ML experiment wall-clock time results (fit and/or predict) and tradeoff curves.
     
@@ -636,7 +1492,7 @@ def plot_time_results(results_data, visual_config, time_of=None, log_x=False, lo
                     y_std = final_stats[('score', 'std')]
                     current_max_context = final_stats['context_size'].max()
 
-                line, = ax.plot(x, y_mean, label=model_name, color=color, marker='o', markersize=4)
+                line, = ax.plot(x, y_mean, label=model_name, color=color, marker='o')
                 line_objs[model_name] = line
                 if model_name not in model_handles: 
                     model_handles[model_name] = line
@@ -647,8 +1503,9 @@ def plot_time_results(results_data, visual_config, time_of=None, log_x=False, lo
                 if log_y and metric != 'tradeoff':
                     lower_bound = np.maximum(lower_bound, y_mean * 0.1)
                 
+                hatch_val = hatch if use_hatching else None
                 ax.fill_between(x, lower_bound, upper_bound, 
-                                color=color, alpha=0.2, hatch=None, edgecolor='none')
+                                color=color, alpha=0.2, hatch=hatch_val, edgecolor='none')
                 
                 # --- EARLY TERMINATION MARKER ---
                 if current_max_context < scenario_max_context:
@@ -739,7 +1596,7 @@ def plot_time_results(results_data, visual_config, time_of=None, log_x=False, lo
                 if out_of_bounds_labels:
                     has_out_of_bounds = True
                     ax.text(0.95, 0.95, '\n'.join(out_of_bounds_labels), transform=ax.transAxes, 
-                            ha='right', va='top', fontsize=9, 
+                            ha='right', va='top', 
                             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), zorder=10)
 
             # Display names & Titles
@@ -754,12 +1611,12 @@ def plot_time_results(results_data, visual_config, time_of=None, log_x=False, lo
                 ax_title = "Tradeoff (Score vs Time)"
 
             if row_idx == 0:
-                ax.set_title(ax_title, fontsize=14, fontweight='bold')
+                ax.set_title(ax_title)
             
             if col_idx == 0:
-                ax.set_ylabel(f"{scenario}\n\n{metric_display_name}", fontsize=12, fontweight='bold')
+                ax.set_ylabel(f"{scenario}\n\n{metric_display_name}")
             else:
-                ax.set_ylabel(metric_display_name, fontsize=12, fontweight='bold')
+                ax.set_ylabel(metric_display_name)
             
             # Bottom labels
             if metric == 'tradeoff':
@@ -767,7 +1624,7 @@ def plot_time_results(results_data, visual_config, time_of=None, log_x=False, lo
             else:
                 ax.set_xlabel("Context Size")
 
-            ax.grid(True, linestyle='--', alpha=0.6)
+            ax.grid(True)
 
     # --- NEW FUNCTIONALITY: Global Horizontal Legend ---
     # Handle the Out-of-Bounds special legend entry
@@ -786,7 +1643,7 @@ def plot_time_results(results_data, visual_config, time_of=None, log_x=False, lo
         top_space = 1.0
         legend_y = 1.0 - (0.5 / fig_height)
         title_y = 1.0 - (0.15 / fig_height)
-        fig.suptitle(plot_title, fontsize=18, fontweight='bold', y=title_y)
+        fig.suptitle(plot_title, y=title_y)
     else:
         top_space = 0.7
         legend_y = 1.0 - (0.15 / fig_height)
@@ -794,7 +1651,7 @@ def plot_time_results(results_data, visual_config, time_of=None, log_x=False, lo
     rect_top = 1.0 - (top_space / fig_height)
 
     fig.legend(final_handles, final_labels, loc='upper center', 
-               bbox_to_anchor=(0.5, legend_y), ncol=ncols, fontsize=10)
+               bbox_to_anchor=(0.5, legend_y), ncol=ncols)
 
     plt.tight_layout(rect=[0, 0, 1, rect_top])
         
@@ -802,7 +1659,7 @@ def plot_time_results(results_data, visual_config, time_of=None, log_x=False, lo
 
 def plot_main_results(results_data, visual_config, log_x=False, log_y=False, 
                     zoom_on_model=None, plot_title=None, mark_best=False, 
-                    plot_scenario=None, plot_metric=None, legends_vertical=False, grid_layout=None):
+                    plot_scenario=None, plot_metric=None, legends_vertical=False, grid_layout=None, use_hatching=False):
     """
     Plots ML experiment results with filtering for specific scenarios and metrics.
     
@@ -835,7 +1692,7 @@ def plot_main_results(results_data, visual_config, log_x=False, log_y=False,
             summary = run['instance_summary']
             
             for metric_name, values in summary.items():
-                if metric_name not in metrics_list:
+                if metric_name != "RMSE" and metric_name not in metrics_list:
                     metrics_list.append(metric_name)
                 
                 val = values.numpy().mean() if hasattr(values, 'numpy') else np.mean(values)
@@ -939,7 +1796,7 @@ def plot_main_results(results_data, visual_config, log_x=False, log_y=False,
                 y_mean = final_stats['mean']
                 y_std = final_stats['std']
                 
-                line, = ax.plot(x, y_mean, label=model_name, color=color, marker='o', markersize=4)
+                line, = ax.plot(x, y_mean, label=model_name, color=color, marker='o')
                 line_objs[model_name] = line
                 if model_name not in model_handles: 
                     model_handles[model_name] = line
@@ -950,8 +1807,9 @@ def plot_main_results(results_data, visual_config, log_x=False, log_y=False,
                 if log_y and metric != 'NLLH':
                     lower_bound = np.maximum(lower_bound, y_mean * 0.1)
                 
+                hatch_val = hatch if use_hatching else None
                 ax.fill_between(x, lower_bound, upper_bound, 
-                                color=color, alpha=0.2, hatch=None, edgecolor='none')
+                                color=color, alpha=0.2, hatch=hatch_val, edgecolor='none')
                 
                 # --- EARLY TERMINATION MARKER ---
                 current_max_context = x.max()
@@ -1030,34 +1888,31 @@ def plot_main_results(results_data, visual_config, log_x=False, log_y=False,
                 if out_of_bounds_labels:
                     has_out_of_bounds = True
                     ax.text(0.95, 0.95, '\n'.join(out_of_bounds_labels), transform=ax.transAxes, 
-                            ha='right', va='top', fontsize=9, 
+                            ha='right', va='top', 
                             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), zorder=10)
 
-            if use_custom_grid:
-                if n_metrics == 1:
-                    ax.set_title(scenario, fontsize=14, fontweight='bold')
-                    if ax_col == 0: ax.set_ylabel(metric, fontsize=12, fontweight='bold')
+            # --- NEW: Layout ---
+            if len(scenarios) == 1 and len(metrics) == 1:
+                # Case 1: Specific Scenario & Specific Metric -> Title becomes Scenario
+                ax.set_title(scenario)
+                ax.set_ylabel(metric)
+            elif use_custom_grid:
+                if len(metrics) == 1:
+                    ax.set_title(scenario)
+                    if ax_col == 0: ax.set_ylabel(metric)
                 else:
-                    ax.set_title(metric, fontsize=14, fontweight='bold')
-                    if ax_col == 0: ax.set_ylabel(scenario, fontsize=12, fontweight='bold')
+                    ax.set_title(metric)
+                    if ax_col == 0: ax.set_ylabel(scenario)
             else:
-                if row_idx == 0:
-                    ax.set_title(f"Metric: {metric}", fontsize=14, fontweight='bold')
-                
-                if col_idx == 0:
-                    ax.set_ylabel(f"{scenario}\n\n{metric}", fontsize=12, fontweight='bold')
-                else:
-                    ax.set_ylabel(metric, fontsize=12, fontweight='bold')
+                if row_idx == 0: ax.set_title(f"Metric: {metric}")
+                ax.set_ylabel(f"{scenario}\n\n{metric}" if col_idx == 0 else metric)
             
             ax.set_xlabel("Context Size")
-            ax.grid(True, linestyle='--', alpha=0.6)
+            ax.grid(True)
 
     # Handle the Out-of-Bounds special legend entry
+    # Handle the Out-of-Bounds special legend entry
     if has_out_of_bounds:
-        # Delete any unused subplots in a custom grid completely
-        if use_custom_grid:
-            for i in range(total_plots, g_rows * g_cols):
-                fig.delaxes(axes[i // g_cols][i % g_cols])
         special_handles['Out-of-Bounds'] = ax.scatter([], [], marker='$\\gg$', facecolors='none', edgecolors='black', linewidths=0.5, s=100)
 
     # Merge handles, ensuring models are listed first
@@ -1066,31 +1921,63 @@ def plot_main_results(results_data, visual_config, log_x=False, log_y=False,
 
     ncols = 1 if legends_vertical else len(final_handles)
     
-    # Calculate dynamic spacing to keep absolute gap consistent regardless of row count
-    fig_height = 5 * g_rows
-    
-    # Increased top_space to pull the plots further down, giving the legend more room
-    if plot_title:
-        top_space = 1.6 if legends_vertical else 1.2
-        legend_y = 1.0 - (0.5 / fig_height)
-        title_y = 1.0 - (0.15 / fig_height)
-        fig.suptitle(plot_title, fontsize=18, fontweight='bold', y=title_y)
-    else:
-        top_space = 1.3 if legends_vertical else 1.1
-        legend_y = 1.0 - (0.15 / fig_height)
+    # --- NEW: Check if there's only one plot ---
+    if total_plots == 1:
+        # Case: Single plot -> Put legend inside the plot
+        single_ax = axes[0][0]
+        single_ax.legend(final_handles, final_labels, loc='best', ncol=ncols)
         
-    rect_top = 1.0 - (top_space / fig_height)
+        if plot_title:
+            fig.suptitle(plot_title)
+            plt.tight_layout(rect=[0, 0, 1, 0.96]) # Slight margin for title
+        else:
+            plt.tight_layout()
+            
+    else:
+        # Case: Multiple plots -> Keep global legend on top and handle orphan centering
+        fig_height = 5 * g_rows
+        
+        if plot_title:
+            top_space = 1.6 if legends_vertical else 1.2
+            legend_y = 1.0 - (0.5 / fig_height)
+            title_y = 1.0 - (0.15 / fig_height)
+            fig.suptitle(plot_title, y=title_y)
+        else:
+            top_space = 1.3 if legends_vertical else 1.1
+            legend_y = 1.0 - (0.15 / fig_height)
+            
+        rect_top = 1.0 - (top_space / fig_height)
 
-    fig.legend(final_handles, final_labels, loc='upper center', 
-               bbox_to_anchor=(0.5, legend_y), ncol=ncols, fontsize=10)
+        fig.legend(final_handles, final_labels, loc='upper center', 
+              bbox_to_anchor=(0.5, legend_y), ncol=ncols)
 
-    plt.tight_layout(rect=[0, 0, 1, rect_top])
+        plt.tight_layout(rect=[0, 0, 1, rect_top])
+        
+        # Center orphan subplots in the last row
+        empty_slots = (g_rows * g_cols) - total_plots
+        if 0 < empty_slots < g_cols and g_cols > 1:
+            pos_0 = axes[0][0].get_position()
+            pos_1 = axes[0][1].get_position()
+            step = pos_1.x0 - pos_0.x0
+            shift = (empty_slots * step) / 2.0
+            
+            cols_in_last_row = g_cols - empty_slots
+            for col in range(cols_in_last_row):
+                ax_to_move = axes[g_rows - 1][col]
+                pos = ax_to_move.get_position()
+                pos.x0 += shift
+                pos.x1 += shift
+                ax_to_move.set_position(pos)
+                
+    # Delete any unused subplots completely
+    for i in range(total_plots, g_rows * g_cols):
+        fig.delaxes(axes[i // g_cols][i % g_cols])
         
     return fig
 
 def plot_vram_results(results_data, visual_config, vram_of=None, log_x=False, log_y=False, 
                       zoom_on_model=None, plot_title=None, mark_best=False, 
-                      plot_scenario=None, merge_plots=False):
+                      plot_scenario=None, merge_plots=False, use_hatching=False):
     """
     Plots TabPFN VRAM usage (fit and/or predict) in Gigabytes.
     
@@ -1231,11 +2118,12 @@ def plot_vram_results(results_data, visual_config, vram_of=None, log_x=False, lo
                     
                     # Override labels/colors if merging plots
                     plot_color = merge_colors[metric] if merge_plots else color
+                    plot_hatch = hatch  # Store original hatch
                     final_label = f"Fit VRAM (GB)" if metric == 'fit' else f"Predict VRAM (GB)"
                     if not merge_plots:
                         final_label = model_name
 
-                    line, = ax.plot(x, y_mean, label=final_label, color=plot_color, marker='o', markersize=4)
+                    line, = ax.plot(x, y_mean, label=final_label, color=plot_color, marker='o')
                     line_objs[final_label] = line
                     
                     if final_label not in global_handles:
@@ -1247,9 +2135,10 @@ def plot_vram_results(results_data, visual_config, vram_of=None, log_x=False, lo
                     if log_y:
                         lower_bound = np.maximum(lower_bound, y_mean * 0.1)
                     
+                    hatch_val = plot_hatch if use_hatching else None
                     ax.fill_between(x, lower_bound, upper_bound, 
                                     color=plot_color, alpha=0.2, 
-                                    hatch=None, edgecolor='none')
+                                    hatch=hatch_val, edgecolor='none')
                     
                     # --- EARLY TERMINATION MARKER ---
                     current_max_context = x.max()
@@ -1336,19 +2225,19 @@ def plot_vram_results(results_data, visual_config, vram_of=None, log_x=False, lo
 
             # Titles and Y-Labels dynamically adjust based on merge state
             if merge_plots:
-                ax.set_title(scenario, fontsize=14, fontweight='bold')
-                ax.set_ylabel("VRAM (GB)", fontsize=12, fontweight='bold')
+                ax.set_title(scenario)
+                ax.set_ylabel("VRAM (GB)")
             else:
                 metric_display_name = "Fit VRAM (GB)" if metrics_to_plot[0] == 'fit' else "Predict VRAM (GB)"
                 if row_idx == 0:
-                    ax.set_title(metric_display_name, fontsize=14, fontweight='bold')
+                    ax.set_title(metric_display_name)
                 if col_idx == 0:
-                    ax.set_ylabel(f"{scenario}\n{metric_display_name}", fontsize=12, fontweight='bold')
+                    ax.set_ylabel(f"{scenario}\n{metric_display_name}")
                 else:
-                    ax.set_ylabel(metric_display_name, fontsize=12, fontweight='bold')
+                    ax.set_ylabel(metric_display_name)
             
             ax.set_xlabel("Context Size")
-            ax.grid(True, linestyle='--', alpha=0.6)
+            ax.grid(True)
 
     # --- Global Legend and Layout Finalization ---
     handles = list(global_handles.values())
@@ -1356,7 +2245,7 @@ def plot_vram_results(results_data, visual_config, vram_of=None, log_x=False, lo
 
     fig_height = 5 * n_rows
     if plot_title:
-        fig.suptitle(plot_title, fontsize=18, fontweight='bold', y=1.0 - (0.15 / fig_height))
+        fig.suptitle(plot_title, y=1.0 - (0.15 / fig_height))
         legend_y = 1.0 - (0.5 / fig_height)
         rect_top = 1.0 - (1.0 / fig_height) # Leave space for title + legend
     else:
@@ -1365,9 +2254,382 @@ def plot_vram_results(results_data, visual_config, vram_of=None, log_x=False, lo
 
     # Render single global legend horizontally with border
     fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, legend_y), 
-               ncol=len(labels), fontsize=11, frameon=True, 
-               framealpha=0.8, facecolor='white', edgecolor='silver')
+               ncol=len(labels))
     
+    plt.tight_layout(rect=[0, 0, 1, rect_top])
+        
+    return fig
+
+def plot_combined_time_vram_results(results_data, visual_config, log_x=False, log_y=False, 
+                                    zoom_on_model=None, plot_title=None, mark_best=False, 
+                                    plot_scenario=None, use_hatching=False):
+    """
+    Plots ML experiment wall-clock time results, tradeoff curves, and VRAM usage.
+    Outputs a grid where each row is a scenario and columns are:
+    [Fit Time, Predict Time, Tradeoff, VRAM]
+    """
+    # 1. Validation
+    if set(results_data.keys()) != set(visual_config.keys()):
+        raise KeyError("The keys in results_data and visual_config must match exactly.")
+    
+    if zoom_on_model is not None and zoom_on_model not in results_data.keys():
+        raise ValueError(f"zoom_on_model '{zoom_on_model}' not found in results_data keys.")
+
+    # 2. Flatten and Pre-process Data
+    all_records = []
+
+    for model_name, runs in results_data.items():
+        is_tabpfn = "tabpfn" in model_name.lower()
+        
+        for run_idx, run in enumerate(runs):
+            scenario = run.get('scenario')
+            context_size = run.get('context_size')
+            fold = run.get('fold')
+         
+            # --- PATCH 1: Added TypeError to handle explicit None values in nested dicts ---
+            # Extract times
+            try:
+                if is_tabpfn:
+                    f_time = run['mem_time_stats']['fit']['time_s']
+                    p_time = run['mem_time_stats']['predict']['time_s']
+                else:
+                    f_time = run.get('fit_time')
+                    p_time = run.get('predict_time')
+            except (KeyError, TypeError):
+                f_time, p_time = None, None
+
+            # Extract VRAM (TabPFN Specific)
+            try:
+                if is_tabpfn:
+                    f_vram = run['mem_time_stats']['fit']['spike_mb'] / 1024.0
+                    p_vram = run['mem_time_stats']['predict']['spike_mb'] / 1024.0
+                    total_vram = f_vram + p_vram  # <-- NEW: Calculate total
+                else:
+                    f_vram, p_vram, total_vram = None, None, None
+            except (KeyError, TypeError):
+                f_vram, p_vram, total_vram = None, None, None
+
+            # Handle warnings
+            if f_time is None or p_time is None:
+                warnings.warn(f"Missing time data for {model_name}, scenario '{scenario}', fold {fold}.")
+            if (f_vram is None or p_vram is None) and is_tabpfn:
+                warnings.warn(f"Missing VRAM data for {model_name}, scenario '{scenario}', fold {fold}.")
+
+            # --- PATCH 2: Added ZeroDivisionError and TypeError safeguards for Tradeoff ---
+            try:
+                values = run['instance_summary']['NLLH']
+                score = values.numpy().mean() if hasattr(values, 'numpy') else np.mean(values)
+                N = len(run['instance_summary']['NLLH'])
+                if N == 0: raise ZeroDivisionError
+                amortized_time = (f_time + p_time) / N if (f_time is not None and p_time is not None) else None
+            except (KeyError, TypeError, ZeroDivisionError):
+                score, amortized_time = None, None
+
+            # Route to appropriate metrics
+            if f_time is not None:
+                all_records.append({"model": model_name, "scenario": scenario, "context_size": context_size, "fold": fold, "metric": "fit_time", "value": f_time})
+            if p_time is not None:
+                all_records.append({"model": model_name, "scenario": scenario, "context_size": context_size, "fold": fold, "metric": "predict_time", "value": p_time})
+            if score is not None and amortized_time is not None:
+                all_records.append({"model": model_name, "scenario": scenario, "context_size": context_size, "fold": fold, "metric": "tradeoff", "amortized_time": amortized_time, "score": score})
+            if total_vram is not None:
+                # <-- NEW: Only append the combined total VRAM
+                all_records.append({"model": model_name, "scenario": scenario, "context_size": context_size, "fold": fold, "metric": "total_vram", "value": total_vram})
+
+    df = pd.DataFrame(all_records)
+    if df.empty:
+        raise ValueError("No valid data found to plot.")
+    
+    # --- FILTERING ---
+    all_available_scenarios = sorted(df['scenario'].unique())
+
+    if plot_scenario is not None:
+        requested_scenarios = [plot_scenario] if isinstance(plot_scenario, str) else plot_scenario
+        missing = set(requested_scenarios) - set(all_available_scenarios)
+        if missing:
+            raise ValueError(f"Scenarios {missing} not found in data. Available: {all_available_scenarios}")
+        scenarios = requested_scenarios
+    else:
+        scenarios = all_available_scenarios
+
+    metrics_cols = ['fit_time', 'predict_time', 'tradeoff', 'vram']
+    context_sizes = sorted(df['context_size'].dropna().unique())
+
+    # 3. Plotting Setup
+    fig, axes = plt.subplots(len(scenarios), len(metrics_cols), 
+                             figsize=(6 * len(metrics_cols), 5 * len(scenarios)), 
+                             squeeze=False)
+
+    global_handles = {}
+    special_handles = {}
+    has_out_of_bounds = False
+    
+
+    for row_idx, scenario in enumerate(scenarios):
+        scenario_max_context = df[df['scenario'] == scenario]['context_size'].max()
+        
+        for col_idx, col_metric in enumerate(metrics_cols):
+            ax = axes[row_idx][col_idx]
+            
+            zoom_bounds = {"min": float('inf'), "max": float('-inf')}
+            abs_best_val = float('inf')
+            abs_best_model = None
+            abs_best_coords = (None, None)
+            line_objs = {}
+            
+            # -------------------------------------------------------------
+            # LOGIC FOR TIME AND TRADEOFF PLOTS (Col 0, 1, 2)
+            # -------------------------------------------------------------
+            if col_metric != 'vram':
+                for model_name, (color, hatch) in visual_config.items():
+                    subset = df[(df['model'] == model_name) & (df['scenario'] == scenario) & (df['metric'] == col_metric)]
+                    if subset.empty: continue
+
+                    if col_metric != 'tradeoff':
+                        fold_means = subset.groupby(['context_size', 'fold'])['value'].mean().reset_index()
+                        final_stats = fold_means.groupby('context_size')['value'].agg(['mean', 'std']).reset_index().sort_values('context_size')
+                        
+                        x = final_stats['context_size']
+                        y_mean = final_stats['mean']
+                        # --- PATCH 3: fillna(0) to prevent matplotlib crashing on 0-variance fill_betweens ---
+                        y_std = final_stats['std'].fillna(0)
+                        current_max_context = x.max()
+                    else:
+                        fold_means = subset.groupby(['context_size', 'fold'])[['amortized_time', 'score']].mean().reset_index()
+                        final_stats = fold_means.groupby('context_size')[['amortized_time', 'score']].agg(['mean', 'std']).reset_index().sort_values('context_size')
+                        
+                        x = final_stats[('amortized_time', 'mean')]
+                        y_mean = final_stats[('score', 'mean')]
+                        y_std = final_stats[('score', 'std')].fillna(0)
+                        current_max_context = final_stats['context_size'].max()
+
+                    line, = ax.plot(x, y_mean, label=model_name, color=color, marker='o')
+                    line_objs[model_name] = line
+                    if model_name not in global_handles: 
+                        global_handles[model_name] = line
+                    
+                    lower_bound = y_mean - y_std
+                    upper_bound = y_mean + y_std
+                    
+                    if log_y and col_metric != 'tradeoff':
+                        lower_bound = np.maximum(lower_bound, y_mean * 0.1)
+                    
+                    hatch_val = hatch if use_hatching else None
+                    ax.fill_between(x, lower_bound, upper_bound, color=color, alpha=0.2, hatch=hatch_val, edgecolor='none')
+                    
+                    # EARLY TERMINATION MARKER
+                    if current_max_context < scenario_max_context:
+                        last_x = x.iloc[-1]
+                        last_y = y_mean.iloc[-1]
+                        
+                        if log_x:
+                            x_offset = last_x * 1.15 if last_x > 0 else last_x + 1e-5
+                        else:
+                            if col_metric != 'tradeoff':
+                                x_range = scenario_max_context - context_sizes[0]
+                                x_offset = last_x + (x_range * 0.04) 
+                            else:
+                                x_range = df[df['metric']=='tradeoff']['amortized_time'].max()
+                                x_offset = last_x + (x_range * 0.04)
+                           
+                        sc_timeout = ax.scatter(x_offset, last_y, color=color, marker='x', s=60, linewidth=1.5, zorder=6)
+                        if 'Timeout' not in special_handles: 
+                            special_handles['Timeout'] = sc_timeout
+
+                    # BEST MODEL MARKER
+                    current_min = y_mean.min()
+                    if current_min < abs_best_val:
+                        abs_best_val = current_min
+                        abs_best_model = model_name
+                        abs_best_coords = (x[y_mean.idxmin()], current_min)
+
+                    if zoom_on_model == model_name:
+                        zoom_bounds["min"] = min(zoom_bounds["min"], (y_mean - y_std).min())
+                        zoom_bounds["max"] = max(zoom_bounds["max"], (y_mean + y_std).max())
+
+            # -------------------------------------------------------------
+            # LOGIC FOR VRAM PLOT (Col 3) - Total VRAM logic
+            # -------------------------------------------------------------
+            else: 
+                for model_name, (color, hatch) in visual_config.items():
+                    subset = df[(df['model'] == model_name) & (df['scenario'] == scenario) & (df['metric'] == 'total_vram')]
+                    if subset.empty: continue
+                    
+                    fold_means = subset.groupby(['context_size', 'fold'])['value'].mean().reset_index()
+                    final_stats = fold_means.groupby('context_size')['value'].agg(['mean', 'std']).reset_index().sort_values('context_size')
+                    
+                    x = final_stats['context_size']
+                    y_mean = final_stats['mean']
+                    y_std = final_stats['std'].fillna(0)
+                    
+                    plot_color = color  # <-- NEW: Uses the model's actual dictionary color
+                    hatch_val = hatch if use_hatching else None
+                    final_label = "TabPFN (Fit + Predict VRAM in GB)"  # <-- NEW: Unified label
+                    
+                    line, = ax.plot(x, y_mean, label=final_label, color=plot_color, marker='o')
+                    line_objs[final_label] = line
+                    if final_label not in global_handles:
+                        global_handles[final_label] = line
+                          
+                    lower_bound = y_mean - y_std
+                    upper_bound = y_mean + y_std
+                    
+                    if log_y:
+                        lower_bound = np.maximum(lower_bound, y_mean * 0.1)
+                            
+                    ax.fill_between(x, lower_bound, upper_bound, color=plot_color, alpha=0.2, hatch=hatch_val, edgecolor='none')
+                    
+                    # OOM EARLY TERMINATION
+                    current_max_context = x.max()
+                    if current_max_context < scenario_max_context:
+                        last_x = final_stats['context_size'].iloc[-1]
+                        last_y = final_stats['mean'].iloc[-1]
+                        
+                        if log_x:
+                            x_offset = last_x * 1.15 
+                        else:
+                            x_range = scenario_max_context - context_sizes[0]
+                            x_offset = last_x + (x_range * 0.04) 
+                          
+                        oom_sc = ax.scatter(x_offset, last_y, color=plot_color, marker='x', s=60, linewidth=1.5, zorder=6)
+                        if 'OOM' not in special_handles:
+                            special_handles['OOM'] = oom_sc
+
+                    # BEST VRAM MARKER
+                    current_min = y_mean.min()
+                    if current_min < abs_best_val:
+                        abs_best_val = current_min
+                        abs_best_model = final_label
+                        abs_best_coords = (x[y_mean.idxmin()], current_min)
+
+                    # BOUNDS
+                    if zoom_on_model == model_name: 
+                        zoom_bounds["min"] = min(zoom_bounds["min"], (y_mean - y_std).min())
+                        zoom_bounds["max"] = max(zoom_bounds["max"], (y_mean + y_std).max())
+            # -------------------------------------------------------------
+            # SHARED PLOT FORMATTING
+            # -------------------------------------------------------------
+            if mark_best and abs_best_model is not None:
+                bx, by = abs_best_coords
+                sc_best = ax.scatter(bx, by, color='gold', marker='*', s=150, edgecolor='black', linewidth=0.5, zorder=5)
+                
+                best_leg_label = 'Best Model' if col_metric != 'vram' else 'Best'
+                if best_leg_label not in special_handles: 
+                    special_handles[best_leg_label] = sc_best
+                
+                original_label = line_objs[abs_best_model].get_label()
+                line_objs[abs_best_model].set_label(f"{original_label} <-- Best")
+
+            # X-Axis configuration
+            if log_x:
+                if col_metric == 'tradeoff':
+                    ax.set_xscale('symlog', linthresh=1e-5)
+                else:
+                    ax.set_xscale('log')
+                    ax.set_xticks(context_sizes) 
+                    
+                    if col_metric == 'vram':
+                        ax.xaxis.set_major_formatter(FuncFormatter(lambda x, pos: f"{x:g}"))
+                    else:
+                        ax.xaxis.set_major_formatter(ScalarFormatter())
+                        
+                    plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+            
+            # Y-Axis configuration
+            if log_y and col_metric != 'tradeoff':
+                ax.set_yscale('log')
+                if col_metric == 'vram':
+                    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, pos: f"{y:g}"))
+
+            if zoom_on_model is not None:
+                margin = (zoom_bounds["max"] - zoom_bounds["min"]) * 0.05
+                low, high = zoom_bounds["min"] - margin, zoom_bounds["max"] + margin
+                if log_y and col_metric != 'tradeoff' and low <= 0:
+                    low = zoom_bounds["min"] * 0.9 if zoom_bounds["min"] > 0 else 1e-9
+                ax.set_ylim(low, high)
+
+            if zoom_on_model is not None:
+                current_ylim_max = ax.get_ylim()[1]
+                out_of_bounds_labels = []
+                for lbl, line in line_objs.items():
+                    if col_metric != 'vram':
+                        subset = df[(df['model'] == lbl) & (df['scenario'] == scenario) & (df['metric'] == col_metric)]
+                        if subset.empty: continue
+                        
+                        if col_metric != 'tradeoff':
+                            fold_means = subset.groupby(['context_size', 'fold'])['value'].mean().reset_index()
+                            stats = fold_means.groupby('context_size')['value'].agg(['mean', 'std'])
+                        else:
+                            fold_means = subset.groupby(['context_size', 'fold'])['score'].mean().reset_index()
+                            stats = fold_means.groupby('context_size')['score'].agg(['mean', 'std'])
+                        
+                        if (stats['mean'] - stats['std'].fillna(0)).min() > current_ylim_max:
+                            out_of_bounds_labels.append(f"{lbl} (≫)")
+                            
+                    else: # VRAM Subsets logic
+                        vram_metric = 'total_vram'
+                        # Target the tabpfn model explicitly so we can safely check its bounds against the active ax limits
+                        model_to_check = next((m for m in visual_config.keys() if "tabpfn" in m.lower()), list(visual_config.keys())[0])
+                        
+                        subset = df[(df['model'] == model_to_check) & (df['scenario'] == scenario) & (df['metric'] == vram_metric)]
+                        if subset.empty: continue
+                        
+                        fold_means = subset.groupby(['context_size', 'fold'])['value'].mean().reset_index()
+                        stats = fold_means.groupby('context_size')['value'].agg(['mean', 'std'])
+                        
+                        if (stats['mean'] - stats['std'].fillna(0)).min() > current_ylim_max:
+                            if " <-- Best" not in lbl:
+                                line.set_label(f"{lbl} (≫)")
+                                
+                if out_of_bounds_labels and col_metric != 'vram':
+                    has_out_of_bounds = True
+                    ax.text(0.95, 0.95, '\n'.join(out_of_bounds_labels), transform=ax.transAxes, 
+                            ha='right', va='top', 
+                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), zorder=10)
+
+            # Titles and Labels mapping
+            if col_metric == 'fit_time':
+                ax_title, y_label, x_label = "Fit Time (s)", "Fit Time (s)", "Context Size"
+            elif col_metric == 'predict_time':
+                ax_title, y_label, x_label = "Predict Time (s)", "Predict Time (s)", "Context Size"
+            elif col_metric == 'tradeoff':
+                ax_title, y_label, x_label = "Tradeoff (Score vs Time)", "Score (NLLH)", "Amortized Time (s/pred)"
+            else: # vram
+                ax_title, y_label, x_label = "VRAM (GB)", "VRAM (GB)", "Context Size"
+
+            if row_idx == 0:
+                ax.set_title(ax_title)
+            
+            if col_idx == 0:
+                ax.set_ylabel(f"{scenario}\n\n{y_label}")
+            else:
+                ax.set_ylabel(y_label)
+            
+            ax.set_xlabel(x_label)
+            ax.grid(True)
+
+    # --- Global Legend and Layout Finalization ---
+    if has_out_of_bounds:
+        special_handles['Out-of-Bounds'] = ax.scatter([], [], marker='$\\gg$', facecolors='none', edgecolors='black', linewidths=0.5, s=100)
+
+    final_handles = list(global_handles.values()) + list(special_handles.values())
+    final_labels = list(global_handles.keys()) + list(special_handles.keys())
+    
+    fig_height = 5 * len(scenarios)
+    if plot_title:
+        top_space = 1.0
+        legend_y = 1.0 - (0.5 / fig_height)
+        title_y = 1.0 - (0.15 / fig_height)
+        fig.suptitle(plot_title, y=title_y)
+    else:
+        top_space = 0.7
+        legend_y = 1.0 - (0.10 / fig_height)
+        
+    rect_top = 1.0 - (top_space / fig_height)
+
+    fig.legend(final_handles, final_labels, loc='upper center', 
+               bbox_to_anchor=(0.5, legend_y), ncol=len(final_labels))
+
     plt.tight_layout(rect=[0, 0, 1, rect_top])
         
     return fig
@@ -1962,9 +3224,11 @@ def fetch_save_dict(
             "mem_time_stats": model_specific_info.get("mem_time_stats"),
             "best_epoch": model_specific_info.get("best_epoch"),
             "n_epochs": model_specific_info.get("n_epochs"),
-            "y_scale": model_specific_info.get("y_scale"),
             "y_scaler": model_specific_info.get("y_scaler"),
             "model_config": model_specific_info.get("model_config"),
+            "rf_new_default": model_specific_info.get("rf_new_default"),
+            "n_samples": model_specific_info.get("n_samples"),
+            "n_features": model_specific_info.get("n_features"),
             
             # RF-specific
             "best_hyperparameters": model_specific_info.get("best_hyperparameters"),
