@@ -23,7 +23,7 @@ def load_dict(cfg):
             with open(file, "rb") as doc:
                 file_dict = pickle.load(doc)
             if (file_dict.get('model_name') == cfg.model_name and
-                file_dict.get('target_scale') == cfg.target_scale and
+                file_dict.get('target_scale') == cfg.target_scale.value and
                 file_dict.get('scenario') == cfg.scenario and
                 file_dict.get('fold') == cfg.fold and
                 file_dict.get('context_size') == cfg.context_size and
