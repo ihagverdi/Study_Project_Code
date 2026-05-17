@@ -109,6 +109,8 @@ class DistNetHandler(BaseModelHandler):
             saved_target_scale = TargetScale.from_str(loadf.get('target_scale'))
             
             saved_y_scaler = loadf.get('model_specific_info', {}).get('y_scaler')
+            if cfg.target_scale == TargetScale.MAX:
+                assert saved_y_scaler is not None
 
 
             new_metrics_sum, new_inst_sum = calculate_metrics_distnet(
@@ -164,7 +166,10 @@ class BayesianDistNetHandler(BaseModelHandler):
 
             saved_preds = loadf.get('y_test_preds')
             saved_target_scale = TargetScale.from_str(loadf.get('target_scale'))
+            
             saved_y_scaler = loadf.get('model_specific_info', {}).get('y_scaler')
+            if cfg.target_scale == TargetScale.MAX:
+                assert saved_y_scaler is not None
 
 
             new_metrics_sum, new_inst_sum = calculate_metrics_distnet(
@@ -249,6 +254,8 @@ class TabPFNHandler(BaseModelHandler):
 
             saved_target_scale = TargetScale.from_str(loadf.get('target_scale'))
             saved_y_scaler = loadf.get('model_specific_info', {}).get('y_scaler')
+            if cfg.target_scale == TargetScale.MAX:
+                assert saved_y_scaler is not None
 
             # fetch saved tabpfn preds
             pfn_exp_id = generate_experiment_id(cfg)
