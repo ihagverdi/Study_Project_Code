@@ -48,8 +48,7 @@ def load_dict(cfg):
                 file_dict.get('seed_feature_drop_rate') == cfg.seed_feature_drop_rate and
                 file_dict.get('remove_duplicates') == cfg.remove_duplicates and
                 file_dict.get('oracle') == cfg.oracle and
-                file_dict.get('do_hpo') == cfg.do_hpo and
-                file_dict.get('subsample_unflattened') == cfg.subsample_unflattened and file_dict.get('rf_new_default', False) == cfg.rf_new_default):
+                file_dict.get('subsample_unflattened') == cfg.subsample_unflattened):
  
                 lookup_file_dict = file_dict
                 lookup_file_name = file.name
