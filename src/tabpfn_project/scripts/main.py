@@ -18,7 +18,7 @@ def train_test_model(cfg: ExperimentConfig):
     save_dir = RESULTS_DIR / cfg.save_dir.lstrip('/\\')
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    y_test = prepare_datasets(cfg)
+    X_train_flat, X_test, y_train_flat, y_test, train_group_ids_flat = prepare_datasets(cfg)
     rand_array = np.zeros(10)
 
     handlers = {
@@ -34,7 +34,7 @@ def train_test_model(cfg: ExperimentConfig):
         raise ValueError(f"Unsupported model: {cfg.model_name}")
     
     handler = handlers[cfg.model_name]
-    res_dict, res_name = handler.run(cfg, rand_array, rand_array, rand_array, y_test, rand_array)
+    res_dict, res_name = handler.run(cfg, X_train_flat, X_test, y_train_flat, y_test, train_group_ids_flat)
 
     meta_dir = save_dir / "metadata"
     meta_dir.mkdir(exist_ok=True)

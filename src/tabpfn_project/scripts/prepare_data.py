@@ -69,4 +69,4 @@ def prepare_datasets(cfg: ExperimentConfig):
             seed=cfg.seed_feature_drop_rate
         )
 
-    return y_test
+    return X_train_flat, X_test, y_train_flat, y_test, train_group_ids_flat
