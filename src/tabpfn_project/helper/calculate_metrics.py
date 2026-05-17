@@ -68,17 +68,16 @@ def calculate_metrics_distnet(
 
     all_nllh = -llh.mean(dim=1) + bias
 
-    # RMSE Calculation (Original Space)
-    y_emp_mean = y_test_original.mean(dim=1)
+    # MAE Calculation (Original Space)
+    y_emp_median = y_test_original.median(dim=1)[0]
     if target_scale == TargetScale.LOG:
-        y_pred_mean = torch.expm1(mu).squeeze(1)
+        y_pred_median = torch.expm1(mu).squeeze(1)
     elif target_scale == TargetScale.MAX:
-        # dist.mean gets E[Y_scaled]. Divide by y_scaler to get E[Y]. Map to Z.
-        y_pred_mean = (dist.mean / y_scaler).squeeze(1)
+        y_pred_median = (dist.icdf(torch.tensor(0.5, device=device)) / y_scaler).squeeze(1)
 
-    all_rmse = torch.abs(y_pred_mean - y_emp_mean)
+    all_mae = torch.abs(y_pred_median - y_emp_median)
 
-    return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_rmse)
+    return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_mae)
 
 def calculate_metrics_tabpfn(
     *tabpfn_models_preds,
@@ -109,7 +108,7 @@ def calculate_metrics_tabpfn(
 
     y_scaler = torch.as_tensor(y_scaler, dtype=torch.float32, device=device) if y_scaler is not None else torch.tensor(1.0, device=device)
 
-    all_crps, all_w1, all_ks, all_nllh, all_rmse = [], [], [], [], []
+    all_crps, all_w1, all_ks, all_nllh, all_mae = [], [], [], [], []
     instance_idx = 0
     
     # Synchronously iterate over batches from all models in the ensemble
@@ -214,33 +213,56 @@ def calculate_metrics_tabpfn(
         
         all_nllh.append(batch_nllh.detach().cpu())
 
-        # RMSE Calculation (Original Space)
-        batch_y_emp_mean = batch_y_original.mean(dim=1)
+        # MAE Calculation (Original Space)
+        batch_y_emp_median = batch_y_original.median(dim=1)[0]
+
+        # 1. Initialize Bisection Bounds 
+        # We safely bound the search space using the absolute extrema of the models' support
+        z_low = torch.full((batch_size,), global_min_z_model.item() - 1.0, device=device)
+        z_high = torch.full((batch_size,), global_max_z_model.item() + 1.0, device=device)
         
-        # Calculate expected value for each model in the ensemble
-        pred_means_models = []
-        for batch in batches:
-            logits = batch['logits'].to(device)
-            criterion = batch['criterion'].to(device)
-            pred_means_models.append(criterion.mean(logits))
+        _y_scaler_safe = y_scaler.view(-1, 1) if y_scaler.ndim == 1 else y_scaler
+
+        # 2. Bisection Loop
+        for _ in range(50):
+            z_mid = (z_low + z_high) / 2.0
+            z_eval = z_mid.unsqueeze(1) # Shape: (batch_size, 1)
             
-        # Average point predictions across the ensemble
-        agg_pred_mean = torch.stack(pred_means_models, dim=0).mean(dim=0)
+            # Evaluate the exact aggregated CDF at z_mid
+            F_tabs_mid = []
+            for batch in batches:
+                logits = batch['logits'].to(device)
+                criterion = batch['criterion'].to(device)
+                
+                # Map z_eval to the space the model was natively trained on
+                if target_scale == TargetScale.LOG:
+                    y_eval = z_eval
+                elif target_scale == TargetScale.ORIGINAL:
+                    y_eval = torch.expm1(z_eval)
+                elif target_scale == TargetScale.MAX:
+                    y_eval = torch.expm1(z_eval) * _y_scaler_safe
+                    
+                F_tabs_mid.append(criterion.cdf(logits=logits, y=y_eval))
+            
+            # Average the probabilities (Bayesian Model Averaging)
+            F_mid_agg = torch.stack(F_tabs_mid, dim=0).mean(dim=0).squeeze(1) # Shape: (batch_size,)
+            
+            # Update bounds based on where the CDF crossed 0.5
+            mask = F_mid_agg >= 0.5
+            z_high = torch.where(mask, z_mid, z_high)
+            z_low = torch.where(mask, z_low, z_mid)
+            
+        # 3. Extract exact median and map to original space
+        batch_z_pred_median = (z_low + z_high) / 2.0
         
-        # Map aggregated prediction to y-space
-        if target_scale == TargetScale.LOG:
-            batch_y_pred_mean = torch.expm1(agg_pred_mean)
-        elif target_scale == TargetScale.ORIGINAL:
-            batch_y_pred_mean = agg_pred_mean
-        elif target_scale == TargetScale.MAX:
-            batch_y_pred_mean = (agg_pred_mean / y_scaler)
-            
-        batch_rmse = torch.abs(batch_y_pred_mean - batch_y_emp_mean)
-        all_rmse.append(batch_rmse.detach().cpu())
+        batch_y_pred_median = torch.expm1(batch_z_pred_median)
+        
+        batch_mae = torch.abs(batch_y_pred_median - batch_y_emp_median)
+        all_mae.append(batch_mae.detach().cpu())
 
         instance_idx += batch_size
         
-    return _format_metrics_output(torch.cat(all_nllh), torch.cat(all_crps), torch.cat(all_w1), torch.cat(all_ks), torch.cat(all_rmse))
+    return _format_metrics_output(torch.cat(all_nllh), torch.cat(all_crps), torch.cat(all_w1), torch.cat(all_ks), torch.cat(all_mae))
 
 def calculate_metrics_lognormal(
     y_test_original, lognormal_dist, *, device, N_grid_points,
@@ -272,16 +294,15 @@ def calculate_metrics_lognormal(
     bias = -torch.log(torch.max(z_test_original, dim=1)[0])
     all_nllh = -llh.mean(dim=1) + bias
 
-    # RMSE Calculation (Original Space)
-    y_emp_mean = y_test_original.mean(dim=1)
-    if lognormal_dist.mean.ndim > 1:
-        y_pred_mean = (lognormal_dist.mean).squeeze(1)
-    else:
-        y_pred_mean = lognormal_dist.mean
+    # MAE Calculation (Original Space)
+    y_emp_median = y_test_original.median(dim=1)[0]
+    y_pred_median = lognormal_dist.icdf(torch.tensor(0.5, device=device))
+    if y_pred_median.ndim > 1:
+        y_pred_median = y_pred_median.squeeze(-1)
     
-    all_rmse = torch.abs(y_pred_mean - y_emp_mean)
+    all_mae = torch.abs(y_pred_median - y_emp_median)
 
-    return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_rmse)
+    return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_mae)
 
 def calculate_metrics_random_forest(
     y_test_original, preds, *, device, N_grid_points,
@@ -320,12 +341,12 @@ def calculate_metrics_random_forest(
     bias = -torch.log(torch.max(z_test_original, dim=1)[0])
     all_nllh = -llh.mean(dim=1) + bias
 
-    # RMSE Calculation (Original Space)
-    y_emp_mean = y_test_original.mean(dim=1)
-    y_pred_mean = torch.expm1(means).squeeze(1)
-    all_rmse = torch.abs(y_pred_mean - y_emp_mean)
+    # MAE Calculation (Original Space)
+    y_emp_median = y_test_original.median(dim=1)[0]
+    y_pred_median = torch.expm1(means).squeeze(1)
+    all_mae = torch.abs(y_pred_median - y_emp_median)
 
-    return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_rmse)
+    return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_mae)
 
 def calculate_metrics_gp(
     y_test_original, preds, *, device, N_grid_points,
@@ -362,12 +383,12 @@ def calculate_metrics_gp(
     bias = -torch.log(torch.max(z_test_original, dim=1)[0])
     all_nllh = -llh.mean(dim=1) + bias
 
-    # RMSE Calculation (Original Space)
-    y_emp_mean = y_test_original.mean(dim=1)
-    y_pred_mean = torch.expm1(means).squeeze(1)
-    all_rmse = torch.abs(y_pred_mean - y_emp_mean)
+    # MAE Calculation (Original Space)
+    y_emp_median = y_test_original.median(dim=1)[0]
+    y_pred_median = torch.expm1(means).squeeze(1)
+    all_mae = torch.abs(y_pred_median - y_emp_median)
 
-    return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_rmse)
+    return _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_mae)
 
 def _compute_empirical_spread(z_test_original, device):
     """
@@ -400,7 +421,7 @@ def _integrate_distribution_metrics(z_grid, F_emp, F_model, z_test_original, dev
     
     return crps, w1, ks, 
 
-def _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_rmse):
+def _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_mae):
     """
     Standardizes the return dictionary for all calculator functions.
     """
@@ -413,14 +434,14 @@ def _format_metrics_output(all_nllh, all_crps, all_w1, all_ks, all_rmse):
         "Wasserstein_std": all_w1.std().item(),
         "KS_mean": all_ks.mean().item(),
         "KS_std": all_ks.std().item(),
-        "RMSE_mean": all_rmse.mean().item(),
-        "RMSE_std": all_rmse.std().item(),
+        "MAE_mean": all_mae.mean().item(),
+        "MAE_std": all_mae.std().item(),
     }
     instance_summary = {
         "NLLH": all_nllh.detach().cpu(), 
         "CRPS": all_crps.detach().cpu(), 
         "Wasserstein": all_w1.detach().cpu(), 
         "KS": all_ks.detach().cpu(),
-        "RMSE": all_rmse.detach().cpu(),
+        "MAE": all_mae.detach().cpu(),
     }
     return metrics_summary, instance_summary
