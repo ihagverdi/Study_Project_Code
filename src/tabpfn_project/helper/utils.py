@@ -2737,7 +2737,7 @@ def generate_experiment_id(cfg) -> str:
         ("es", cfg.early_stopping),
         ("jitterX", f"{cfg.jitter_x}_val{cfg.jitter_val}"),
         ("randExt", f"{cfg.rand_extend_x}_n{cfg.n_rand_cols}"),
-        (None, 'cpu' if cfg.use_cpu else 'gpu')
+        (None, 'cpu' if cfg.use_cpu and cfg.model_name != "tabpfn" else 'gpu')
     ]
     
     parts = [f"{label}{val}" if label else str(val) for label, val in params]
