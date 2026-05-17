@@ -14,7 +14,20 @@ from tabpfn_project.globals import (
 from tabpfn_project.helper.utils import TargetScale, generate_experiment_id, sample_k_per_instance, track_gpu_memory_and_time
 from tabpfn_project.helper.y_scalers import max_scaling, log1p_scaling
 from tabpfn_project.paths import RESULTS_DIR, ROOT_DIR
+import io
+import pickle
+import torch
 
+class CPUUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if module == "torch.storage" and name == "_load_from_bytes":
+            return lambda b: torch.load(io.BytesIO(b), map_location="cpu")
+        return super().find_class(module, name)
+
+def load_pickle_cpu(path):
+    with open(path, "rb") as f:
+        return CPUUnpickler(f).load()
+    
 def load_dict(cfg):
         lookup_file_dict = None
         lookup_file_name = None
@@ -263,8 +276,7 @@ class TabPFNHandler(BaseModelHandler):
 
             tabpfn_preds_path = ROOT_DIR / cfg.load_dir.lstrip('/\\') / "tabpfn_preds_full" / tabpfn_preds_fname
 
-            with open(tabpfn_preds_path, 'rb') as f:
-                saved_preds = pickle.load(f)
+            saved_preds = load_pickle_cpu(tabpfn_preds_path)
 
             new_metrics_sum, new_inst_sum = calculate_metrics_tabpfn(
                 *saved_preds, y_test_original=y_test, device=device, target_scale=saved_target_scale, y_scaler=saved_y_scaler, N_grid_points=N_GRID_POINTS
