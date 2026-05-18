@@ -24,7 +24,7 @@ from matplotlib.ticker import ScalarFormatter, FuncFormatter
 plt.rcParams.update({
     # 1. Dimensions and Resolution
     "figure.figsize": (6, 4),    # Exactly matches the 6-inch textwidth from automl.sty
-    "figure.dpi": 100,           # Standard for screen viewing
+    "figure.dpi": 300,           # Standard for screen viewing
     "savefig.dpi": 600,          # High resolution for the final PDF
     "savefig.bbox": "tight",     # Crop whitespace
     "savefig.pad_inches": 0.05,  # Minimal padding
@@ -108,7 +108,7 @@ def plot_ml_heatmap(results_data, visual_config, plot_scenario=None, plot_metric
     all_scenarios = sorted(list(set(all_scenarios)))
     all_metrics_found = set(all_metrics_found)
 
-    FIXED_METRIC_ORDER = ["NLLH", "CRPS", "Wasserstein", "KS"]
+    FIXED_METRIC_ORDER = ["NLLH", "CRPS", "Wasserstein", "KS", "MAE"]
     
     if plot_metric is not None:
         requested_metrics = [plot_metric] if isinstance(plot_metric, str) else plot_metric
@@ -936,7 +936,7 @@ def plot_full_instances_results(results_data, visual_config, log_x=False, log_y=
             summary = run['instance_summary']
             
             for metric_name, values in summary.items():
-                if metric_name != "RMSE" and metric_name not in metrics_list:
+                if metric_name not in metrics_list:
                     metrics_list.append(metric_name)
                 
                 # Step 1: Mean of internal score array
@@ -1692,7 +1692,7 @@ def plot_main_results(results_data, visual_config, log_x=False, log_y=False,
             summary = run['instance_summary']
             
             for metric_name, values in summary.items():
-                if metric_name != "RMSE" and metric_name not in metrics_list:
+                if metric_name not in metrics_list:
                     metrics_list.append(metric_name)
                 
                 val = values.numpy().mean() if hasattr(values, 'numpy') else np.mean(values)
@@ -2633,6 +2633,183 @@ def plot_combined_time_vram_results(results_data, visual_config, log_x=False, lo
     plt.tight_layout(rect=[0, 0, 1, rect_top])
         
     return fig
+
+def plot_rank_over_context_size(results_data, visual_config, metric_name, 
+                                plot_title=None, lower_is_better=True, 
+                                log_x=False, plot_scenario=None,
+                                display_legend_top=False):
+    """
+    Plots a line chart showing how models' average instance-level rankings 
+    change as context size increases.
+    
+    Args:
+        results_data: Dict of {model_name: list_of_runs}
+        visual_config: Dict of {model_name: (color, hatch)}
+        metric_name: String, the specific metric to evaluate (e.g., 'NLLH')
+        plot_title: String, optional custom title
+        lower_is_better: Boolean, True for metrics like Loss, False for Accuracy
+        log_x: Boolean, whether to log-scale the x-axis (context sizes)
+        plot_scenario: String, optional scenario to filter by
+        display_legend_top: Boolean, if True, places a horizontal legend above the plot
+    """
+    if not results_data:
+        raise ValueError("results_data is empty.")
+
+    # 1. Discover all unique context sizes
+    all_ctx_sizes = set()
+    for runs in results_data.values():
+        for run in runs:
+            if run.get('context_size') is not None:
+                all_ctx_sizes.add(run['context_size'])
+    all_ctx_sizes = sorted(list(all_ctx_sizes))
+
+    if not all_ctx_sizes:
+        raise ValueError("No valid context sizes found in the data.")
+
+    max_global_ctx = all_ctx_sizes[-1]
+
+    # 2. Extract, Aggregate, and Rank Data per Context Size
+    all_records = []
+    
+    for ctx_size in all_ctx_sizes:
+        extracted_data = {}
+        
+        # Phase A: Group and stabilize seeds
+        for model_name, runs in results_data.items():
+            seeds_dict = {} 
+            for run in runs:
+                if run.get('context_size') != ctx_size:
+                    continue
+                if metric_name not in run.get('instance_summary', {}):
+                    continue
+                if plot_scenario is not None and run.get('scenario') != plot_scenario:
+                    continue
+                    
+                scenario = run['scenario']
+                fold = run['fold']
+                values = run['instance_summary'][metric_name]
+                
+                arr = values.numpy() if hasattr(values, 'numpy') else np.array(values)
+                key = (scenario, fold)
+                
+                if key not in seeds_dict:
+                    seeds_dict[key] = []
+                seeds_dict[key].append(arr)
+            
+            for key, arrays in seeds_dict.items():
+                seed_avg_arr = np.mean(arrays, axis=0) 
+                if key not in extracted_data:
+                    extracted_data[key] = {}
+                extracted_data[key][model_name] = seed_avg_arr
+
+        if not extracted_data:
+            continue
+
+        # Phase B: Instance-Level Ranking for this specific context size
+        ctx_ranks = []
+        for key, model_arrays in extracted_data.items():
+            available_models = list(model_arrays.keys())
+            if len(available_models) == 0:
+                continue
+                
+            matrix = np.stack([model_arrays[m] for m in available_models]).T
+            df_instances = pd.DataFrame(matrix, columns=available_models)
+            
+            # method='min' handles ties perfectly
+            ranks = df_instances.rank(axis=1, method='min', ascending=lower_is_better).astype(int)
+            
+            for m in available_models:
+                for r in ranks[m]:
+                    ctx_ranks.append({'model': m, 'rank': r})
+                    
+        df_ctx_ranks = pd.DataFrame(ctx_ranks)
+        if df_ctx_ranks.empty:
+            continue
+            
+        # Phase C: Calculate the final cross-instance mean rank for this context size
+        avg_ranks = df_ctx_ranks.groupby('model')['rank'].mean()
+        
+        for m, avg_r in avg_ranks.items():
+            all_records.append({
+                'model': m,
+                'context_size': ctx_size,
+                'mean_rank': avg_r
+            })
+
+    df_plot = pd.DataFrame(all_records)
+    if df_plot.empty:
+        raise ValueError(f"No valid rank data could be computed for metric '{metric_name}'.")
+
+    # 3. Plotting
+    fig, ax = plt.subplots(figsize=(10, 6))
+    added_early_term_legend = False
+    
+    for model_name, (color, hatch) in visual_config.items():
+        subset = df_plot[df_plot['model'] == model_name].sort_values('context_size')
+        if subset.empty:
+            continue
+            
+        x = subset['context_size']
+        y = subset['mean_rank']
+        
+        ax.plot(x, y, label=model_name, color=color, marker='o', markersize=6, linewidth=2.5)
+
+        # --- NEW: Early Termination Marker ---
+        if x.max() < max_global_ctx:
+            last_x = x.iloc[-1]
+            last_y = y.iloc[-1]
+            
+            if log_x:
+                x_offset = last_x * 1.15 if last_x > 0 else last_x + 1e-5
+            else:
+                x_range = max_global_ctx - all_ctx_sizes[0]
+                x_offset = last_x + (x_range * 0.04)
+                
+            label = 'Timeout' if not added_early_term_legend else '_nolegend_'
+            ax.scatter(x_offset, last_y, color=color, marker='x', s=60, 
+                       linewidth=1.5, zorder=6, label=label)
+            added_early_term_legend = True
+
+    # 4. Axis Formatting & Layout
+    if log_x:
+        ax.set_xscale('log')
+        ax.set_xticks(all_ctx_sizes)
+        ax.xaxis.set_major_formatter(ScalarFormatter())
+        plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+    else:
+        ax.set_xticks(all_ctx_sizes)
+        plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+    
+    # Force Y-axis to show integer ticks (1, 2, 3...)
+    max_observed_rank = int(np.ceil(df_plot['mean_rank'].max()))
+    ax.set_yticks(np.arange(1, max_observed_rank + 1))
+
+    ax.set_xlabel("Context Size", fontsize=12, fontweight='bold')
+    ax.set_ylabel(f"Mean Rank", fontsize=12, fontweight='bold')
+    
+    title_str = plot_title if plot_title else f"Change in Average Instance-Level Rankings over Context Size"
+    if plot_scenario:
+        title_str += f"\nScenario: {plot_scenario} | Metric: {metric_name}"
+    else:
+        title_str += f"\nMetric: {metric_name}"
+        
+    # Dynamic Title Padding & Legend Routing
+    if display_legend_top:
+        ax.set_title(title_str, fontsize=14, fontweight='bold', pad=45)
+        # Dynamically widen the legend columns if the Timeout marker was added
+        num_items = df_plot['model'].nunique() + (1 if added_early_term_legend else 0)
+        ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=num_items, 
+                  fontsize=10, framealpha=0.9, edgecolor='silver')
+    else:
+        ax.set_title(title_str, fontsize=14, fontweight='bold', pad=15)
+        ax.legend(loc='best', fontsize=10, framealpha=0.9, edgecolor='silver')
+    
+    ax.grid(True, linestyle='--', alpha=0.6)
+    
+    plt.tight_layout()
+    
+    return fig
+
 # -----
 
 @contextlib.contextmanager
@@ -3154,7 +3331,7 @@ def fetch_save_dict(
     results_dir: pathlib.Path,
     metadata_dir: pathlib.Path,
     model_name: str,
-    save_name: str,
+    model_file_name: str,
     search_key: str | None = None,
     search_value=None,
     scenario: str | None = None,
@@ -3183,7 +3360,7 @@ def fetch_save_dict(
         temp = {
             # Experiment identifiers & config from main.py
             "model_name": results_dict.get("model_name"),
-            "save_name": save_name,
+            "model_file_name": model_file_name,
             "scenario": results_dict.get("scenario"),
             "fold": results_dict.get("fold"),
             
@@ -3209,7 +3386,6 @@ def fetch_save_dict(
             "use_cpu": results_dict.get("use_cpu"),
             "remove_duplicates": results_dict.get("remove_duplicates"),
             "oracle": results_dict.get("oracle"),
-            "do_hpo": results_dict.get("do_hpo"),
             
             # Paths
             "save_dir": results_dict.get("save_dir"),
@@ -3226,7 +3402,6 @@ def fetch_save_dict(
             "n_epochs": model_specific_info.get("n_epochs"),
             "y_scaler": model_specific_info.get("y_scaler"),
             "model_config": model_specific_info.get("model_config"),
-            "rf_new_default": model_specific_info.get("rf_new_default"),
             "n_samples": model_specific_info.get("n_samples"),
             "n_features": model_specific_info.get("n_features"),
             
@@ -3241,9 +3416,9 @@ def fetch_save_dict(
 
     scenario_label = '_' + scenario if scenario is not None else ""
     if search_key is None:
-        output_name = f"{save_name}{scenario_label}.pkl"
+        output_name = f"{model_file_name}{scenario_label}.pkl"
     else:
-        output_name = f"{save_name}_{search_key}_{search_value}{scenario_label}.pkl"
+        output_name = f"{model_file_name}_{search_key}_{search_value}{scenario_label}.pkl"
 
     save_file_path = results_dir / output_name
     with open(save_file_path, "wb") as f:
